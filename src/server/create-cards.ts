@@ -37,6 +37,7 @@ import { type OcrLine, recognizeImage } from "../agent/layout/vision.ts";
 import { pdfPageCount } from "../agent/subagents/pdf-ops.ts";
 import { draftToStudyCards, mediaOf } from "../core/card-adopt.ts";
 import { autoMark } from "../core/card-dedupe.ts";
+import { cardNumber, nextCardIndex } from "../core/card-edit.ts";
 import { normalizePage } from "../core/card-normalize.ts";
 import { applyVerdicts, cardBrief, criticPageText, flaggedCards, glossaryMaterial, parseGlossary, samplePages } from "../core/card-review.ts";
 import { cleanCardSettings } from "../core/card-settings.ts";
@@ -89,14 +90,12 @@ export const defaultCardsDeps = (): CardsDeps => ({ ...defaultCreateDeps(), ...l
 /** Shared deps → cards deps: whatever seams the caller did not name are the live ones. */
 export const withCardSeams = (deps: CreateDeps): CardsDeps => ({ ...liveSeams(), ...deps });
 
-/** The model for the small, mechanical glossary call (no judgement about the cards themselves). */
-const FAST_MODEL = "haiku";
-
-const cardNumber = (id: string): number => Number(/-c(\d+)$/.exec(id)?.[1] ?? 0);
+/** The model for the small, mechanical calls (the glossary, the duplicate check): no judgement about the cards themselves. */
+export const FAST_MODEL = "haiku";
 
 // ─── reading ─────────────────────────────────────────────────────────────────
 
-function requireCards(id: string, deps: CreateDeps): CardsJob {
+export function requireCards(id: string, deps: CreateDeps): CardsJob {
 	const job = requireJob(id, deps);
 	if (job.kind !== "cards") throw new CreateInputError("This is not a cards job", 409);
 	return job;
@@ -246,7 +245,7 @@ const pageMeta = (result: CardPageResult) => {
 };
 
 /** Write one page's drafts and keep the job's counters for that page in step. */
-function savePage(jobId: string, result: CardPageResult, deps: CreateDeps): void {
+export function savePage(jobId: string, result: CardPageResult, deps: CreateDeps): void {
 	deps.create.writeCardPage(jobId, result);
 	deps.create.update(jobId, (j) => {
 		const page = j.pages[String(result.page)];
@@ -324,7 +323,7 @@ async function processCardPage(job: CardsJob, n: number, ctx: RunContext): Promi
 			signal,
 		});
 
-		const result = normalizePage(answer, layout, n, job.settings, Math.max(0, ...kept.map((c) => cardNumber(c.id))) + 1);
+		const result = normalizePage(answer, layout, n, job.settings, nextCardIndex(kept));
 		await critique(job, layout, result.cards, work, ctx);
 		result.cards = [...kept, ...result.cards].sort((a, b) => cardNumber(a.id) - cardNumber(b.id));
 		await realizeMedia(result, {
@@ -467,31 +466,15 @@ export function startCardsJob(id: string, opts: StartCardsOptions = {}, deps: Ca
 
 // ─── drafts ──────────────────────────────────────────────────────────────────
 
-function pageOfCardId(cardId: string): number | null {
+export function pageOfCardId(cardId: string): number | null {
 	const m = /^p(\d{3})-c\d+$/.exec(cardId);
 	return m ? Number(m[1]) : null;
 }
 
-/** Throw a card away (soft) or bring it back. A card that is a study card now has to be deleted in Study. */
-export function setCardDeleted(id: string, cardId: string, deleted: boolean, deps: CreateDeps = defaultCreateDeps()): CardDraft {
-	requireCards(id, deps);
-	const page = pageOfCardId(cardId);
-	const result = page === null ? null : deps.create.readCardPage(id, page);
-	const card = result?.cards.find((c) => c.id === cardId);
-	if (!result || !card) throw new CreateInputError("Unknown card", 404);
-	if (card.adopted && deleted) throw new CreateInputError("This card is already a study card — delete it in Study", 409);
-	card.deleted = deleted;
-	if (!deleted) {
-		card.restored = true; // brought back by the learner: never thrown away by the machine again
-		delete card.note;
-	}
-	savePage(id, result, deps);
-	return card;
-}
-
 /**
- * Turn drafts into study cards of a course: every undeleted, not-yet-adopted draft of the job, or just
- * `cardIds`. The study card ids derive from job + draft, so adopting a draft twice cannot create two cards.
+ * Turn drafts into study cards of a course: every undeleted, not-yet-adopted draft of the job that is selected
+ * (the checklist of the focus screen), or just `cardIds`, whatever their selection. The study card ids derive
+ * from job + draft, so adopting a draft twice cannot create two cards.
  */
 export function adoptCards(id: string, input: { courseId: string; cardIds?: string[] }, deps: CardsDeps = defaultCardsDeps()): AdoptResult {
 	const job = requireCards(id, deps);
@@ -504,12 +487,13 @@ export function adoptCards(id: string, input: { courseId: string; cardIds?: stri
 	const touched: CardPageResult[] = [];
 	const media = new Set<string>();
 	let skipped = 0;
+	let adopted = 0;
 	for (const n of pageNumbers(job)) {
 		const result = deps.create.readCardPage(id, n);
 		if (!result) continue;
 		let changed = false;
 		for (const draft of result.cards) {
-			if (wanted && !wanted.has(draft.id)) continue;
+			if (wanted ? !wanted.has(draft.id) : !draft.include) continue; // not selected: stays a draft
 			if (draft.deleted || draft.adopted) {
 				skipped++;
 				continue;
@@ -522,6 +506,7 @@ export function adoptCards(id: string, input: { courseId: string; cardIds?: stri
 			cards.push(...made);
 			for (const name of mediaOf(draft)) media.add(name);
 			draft.adopted = { courseId: course.id, cardId: made[0]!.id, at };
+			adopted++;
 			changed = true;
 		}
 		if (changed) touched.push(result);
@@ -537,5 +522,5 @@ export function adoptCards(id: string, input: { courseId: string; cardIds?: stri
 		deps.study.upsertCards(cards);
 		for (const result of touched) savePage(id, result, deps);
 	}
-	return { adopted: touched.reduce((sum, r) => sum + r.cards.filter((c) => c.adopted?.at === at).length, 0), skipped };
+	return { adopted, skipped };
 }

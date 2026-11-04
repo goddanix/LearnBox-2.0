@@ -11,9 +11,9 @@ import * as path from "node:path";
 import { after, describe, it } from "node:test";
 import { ClaudeAskError, type AskClaude, type AskClaudeRequest } from "../src/agent/claude-ask.ts";
 import type { PdfSession } from "../src/agent/create/card-media.ts";
-import { CRITIC_SYSTEM } from "../src/agent/create/card-prompts.ts";
+import { CRITIC_SYSTEM, DEDUPE_SYSTEM } from "../src/agent/create/card-prompts.ts";
 import { CreateInputError, type LectureSource } from "../src/core/contracts.ts";
-import type { FrontBackCard } from "../src/core/contracts/create-cards.ts";
+import type { FrontBackCard, OcclusionCard } from "../src/core/contracts/create-cards.ts";
 import type { Box, PageLayout, PageLine } from "../src/core/contracts/page-layout.ts";
 import type { LibraryStore } from "../src/core/ports.ts";
 import {
@@ -22,10 +22,22 @@ import {
 	createCardsJob,
 	finalizeDuplicates,
 	getCardsJob,
-	setCardDeleted,
 	startCardsJob,
 	type CardsDeps,
 } from "../src/server/create-cards.ts";
+import {
+	addManualCard,
+	editImage,
+	editMask,
+	pageImageFile,
+	patchCard,
+	removeDuplicates,
+	reviewDuplicates,
+	semanticDedupeStep,
+	semanticGroups,
+	setFocus,
+	setInclude,
+} from "../src/server/create-cards-edit.ts";
 import { createMcqJob, getCreateJob, startCreateJob, stopCreateJob } from "../src/server/create.ts";
 import { createCreateStore } from "../src/store/create.ts";
 import { createStudyStore } from "../src/store/study.ts";
@@ -262,7 +274,7 @@ describe("running a cards job", () => {
 		assert.ok(duplicates.length >= 1, "the same question on three pages leaves only one");
 		assert.ok(duplicates.every((c) => /duplicate/i.test(c.note ?? "")));
 		assert.equal(finalizeDuplicates(id, deps), 0, "a second pass finds nothing more");
-		const back = setCardDeleted(id, duplicates[0]!.id, false, deps);
+		const back = patchCard(id, duplicates[0]!.id, { deleted: false }, deps);
 		assert.equal(back.deleted, false);
 		assert.equal(back.restored, true);
 		finalizeDuplicates(id, deps);
@@ -448,7 +460,7 @@ describe("adopting cards", () => {
 		assert.equal(getCardsJob(id, deps).job.adopted, 2);
 
 		// an adopted card is a study card now
-		assert.throws(() => setCardDeleted(id, cards[0]!.id, true, deps), (e) => e instanceof CreateInputError && e.status === 409);
+		assert.throws(() => patchCard(id, cards[0]!.id, { deleted: true }, deps), (e) => e instanceof CreateInputError && e.status === 409);
 		assert.throws(() => adoptCards(id, { courseId: "nope" }, deps), (e) => e instanceof CreateInputError && e.status === 404);
 	});
 
@@ -458,11 +470,308 @@ describe("adopting cards", () => {
 		const cards = getCardsJob(id, deps).pages.flatMap((p) => p.cards).filter((c) => !c.deleted);
 		assert.ok(cards.length >= 2);
 		const [one, two] = cards;
-		setCardDeleted(id, two!.id, true, deps);
-		assert.equal(setCardDeleted(id, two!.id, true, deps).deleted, true);
+		patchCard(id, two!.id, { deleted: true }, deps);
+		assert.equal(patchCard(id, two!.id, { deleted: true }, deps).deleted, true);
 		assert.deepEqual(adoptCards(id, { courseId: "cardio", cardIds: [one!.id, two!.id] }, deps), { adopted: 1, skipped: 1 });
 		assert.equal(study.readCards().length, 1);
-		assert.throws(() => setCardDeleted(id, "p009-c01", true, deps), (e) => e instanceof CreateInputError && e.status === 404);
-		assert.throws(() => setCardDeleted(id, "../x", true, deps), (e) => e instanceof CreateInputError && e.status === 404);
+		assert.throws(() => patchCard(id, "p009-c01", { deleted: true }, deps), (e) => e instanceof CreateInputError && e.status === 404);
+		assert.throws(() => patchCard(id, "../x", { deleted: true }, deps), (e) => e instanceof CreateInputError && e.status === 404);
+	});
+});
+
+
+// ─── the focus screen ────────────────────────────────────────────────────────
+
+/** Page 1: a question card, a picture question, and an occlusion card with two masks. */
+const FOCUS_ANSWER = JSON.stringify({
+	topic: "Topic 1",
+	cards: [
+		{ type: "basic", priority: 1, front: "Where does blood back up?", back: "Into the lungs.", evidence: "Blood backs up into the lungs", source: ["L2"] },
+		{ type: "image_question", priority: 2, front: "What does this figure show?", back: "The lungs.", image: { ref: "F1" }, evidence: "Blood backs up into the lungs", source: ["L2"] },
+		{
+			type: "image_occlusion",
+			header: "Name the structure",
+			figure: { ref: "F1" },
+			occlusions: [
+				{ label: "Aorta", bbox: [0.2, 0.5, 0.26, 0.54], priority: 1 },
+				{ label: "Vena cava", bbox: [0.6, 0.6, 0.66, 0.64], priority: 1 },
+			],
+		},
+	],
+});
+
+async function focusJob(over: Partial<CardsDeps> = {}) {
+	const made = setup(
+		{
+			ask: async (req) => {
+				if (isGlossary(req)) return { text: JSON.stringify({ terms: [] }), costUsd: 0, durationMs: 1 };
+				if (isCritic(req)) return { text: JSON.stringify({ cards: [] }), costUsd: 0, durationMs: 1 };
+				return { text: FOCUS_ANSWER, costUsd: 0, durationMs: 1 };
+			},
+			...over,
+		},
+		2,
+	);
+	const id = await runJob(made.deps);
+	const cardsOf = (page: number) => made.create.readCardPage(id, page)!.cards;
+	return { ...made, id, cardsOf };
+}
+
+const fileOnDisk = (deps: CardsDeps, id: string, name: string | null | undefined) => Boolean(name) && fs.existsSync(path.join(deps.create.mediaDir(id), name!));
+
+describe("changing a draft card", () => {
+	it("changes the texts, importance and tags, marks the card edited and keeps it on disk", async () => {
+		const { deps, id, cardsOf } = await focusJob();
+		const [basic] = cardsOf(1) as FrontBackCard[];
+		const out = patchCard(id, basic!.id, { front: "Where does blood back up in left heart failure?", tier: 1, tags: "heart, lungs" }, deps) as FrontBackCard;
+		assert.equal(out.front, "Where does blood back up in left heart failure?");
+		assert.equal(out.edited, true);
+		const saved = cardsOf(1).find((c) => c.id === basic!.id) as FrontBackCard;
+		assert.deepEqual([saved.front, saved.tier, saved.tags], [out.front, 1, ["heart", "lungs"]]);
+	});
+
+	it("refuses an invalid change whole, a study card, an unknown card and a page that is being worked on", async () => {
+		const { deps, id, cardsOf, create } = await focusJob();
+		const [basic, picture] = cardsOf(1) as FrontBackCard[];
+		const before = JSON.stringify(cardsOf(1));
+		assert.throws(() => patchCard(id, basic!.id, { front: "New?", back: "  " }, deps), (e) => e instanceof CreateInputError && e.status === 400);
+		assert.equal(JSON.stringify(cardsOf(1)), before, "nothing was changed");
+
+		adoptCards(id, { courseId: "cardio", cardIds: [picture!.id] }, deps);
+		assert.throws(() => patchCard(id, picture!.id, { tier: 3 }, deps), (e) => e instanceof CreateInputError && e.status === 409);
+		assert.throws(() => patchCard(id, "p001-c99", { tier: 3 }, deps), (e) => e instanceof CreateInputError && e.status === 404);
+
+		create.update(id, (j) => {
+			j.pages["1"]!.status = "running";
+		});
+		assert.throws(() => patchCard(id, basic!.id, { tier: 3 }, deps), (e) => e instanceof CreateInputError && e.status === 409);
+	});
+});
+
+describe("choosing the cards to adopt", () => {
+	it("adopts only the selected cards unless some are named", async () => {
+		const { deps, id, cardsOf, study } = await focusJob();
+		const ids = cardsOf(1).map((c) => c.id);
+		assert.equal(ids.length, 4);
+		assert.equal(setInclude(id, { cardIds: [ids[0]!, ids[1]!, "p002-c01"], include: false }, deps), 3);
+		assert.equal(setInclude(id, { cardIds: [ids[0]!], include: false }, deps), 0, "already unselected");
+		assert.equal(cardsOf(1).filter((c) => !c.include).length, 2);
+
+		const result = adoptCards(id, { courseId: "cardio" }, deps);
+		const adopted = study.readCards().map((c) => c.id.replace(`crt_${id}_`, ""));
+		assert.equal(result.adopted, adopted.length);
+		assert.ok(adopted.includes(ids[2]!) && adopted.includes(ids[3]!), "the selected cards became study cards");
+		assert.ok(![ids[0]!, ids[1]!, "p002-c01"].some((x) => adopted.includes(x)), "an unselected draft stays a draft");
+		assert.equal(cardsOf(1).find((c) => c.id === ids[0])!.adopted, undefined);
+
+		// naming a card adopts it whatever its selection
+		assert.equal(adoptCards(id, { courseId: "cardio", cardIds: [ids[0]!] }, deps).adopted, 1);
+	});
+});
+
+describe("cards by hand", () => {
+	it("adds a question card that survives, numbered after the highest card", async () => {
+		const { deps, id, cardsOf } = await focusJob();
+		const before = cardsOf(1).length;
+		const cards = await addManualCard(id, 1, { type: "basic", front: "What is preload?", back: "The stretch of the ventricle before it contracts.", tier: 1 }, deps);
+		assert.equal(cards.length, before + 1);
+		const made = cardsOf(1).at(-1) as FrontBackCard;
+		assert.equal(made.id, `p001-c0${before + 1}`);
+		assert.equal(made.manual, true);
+		assert.equal(made.tier, 1);
+		assert.equal(deps.create.get(id)!.pages["1"]!.count, before + 1, "the page counter follows");
+	});
+
+	it("adds an occlusion over a drawn area with its two pictures", async () => {
+		const { deps, id, cardsOf } = await focusJob();
+		const cards = await addManualCard(id, 1, { type: "image_occlusion", label: "Mitral valve", bbox: [0.3, 0.7, 0.4, 0.75] }, deps);
+		const made = cards.at(-1) as OcclusionCard;
+		assert.equal(made.manual, true);
+		assert.equal(made.maskExact, true);
+		assert.ok(fileOnDisk(deps, id, made.questionFile) && fileOnDisk(deps, id, made.answerFile));
+		assert.ok((cardsOf(1).at(-1) as OcclusionCard).questionFile, "saved");
+	});
+
+	it("refuses an occlusion without an area, an unprocessed page, an unknown page and a page that is being worked on", async () => {
+		const { deps, id } = await focusJob();
+		await assert.rejects(addManualCard(id, 1, { type: "image_occlusion", label: "x" }, deps), (e) => e instanceof CreateInputError && e.status === 400);
+		await assert.rejects(addManualCard(id, 1, { type: "basic", front: "Q?", back: "" }, deps), (e) => e instanceof CreateInputError && e.status === 400);
+		await assert.rejects(addManualCard(id, 9, { type: "basic", front: "Q?", back: "A" }, deps), (e) => e instanceof CreateInputError && e.status === 404);
+		const fresh = await createCardsJob({ lectureId: "lec1", autostart: false }, deps);
+		await assert.rejects(addManualCard(fresh.id, 1, { type: "basic", front: "Q?", back: "A" }, deps), (e) => e instanceof CreateInputError && e.status === 409);
+
+		// two changes at once: the second is refused, not lost
+		const slow = addManualCard(id, 1, { type: "image_occlusion", label: "Mitral valve", bbox: [0.3, 0.7, 0.4, 0.75] }, deps);
+		await assert.rejects(addManualCard(id, 1, { type: "basic", front: "Q?", back: "A" }, deps), (e) => e instanceof CreateInputError && e.status === 409);
+		await slow;
+	});
+});
+
+describe("moving a mask and a picture", () => {
+	it("moves the mask exactly, draws the pictures again and removes the old ones", async () => {
+		const { deps, id, cardsOf } = await focusJob();
+		const mask = cardsOf(1).find((c) => c.type === "image_occlusion") as OcclusionCard;
+		const oldQuestion = mask.questionFile;
+		assert.ok(fileOnDisk(deps, id, oldQuestion));
+		const cards = await editMask(id, mask.id, { bbox: [0.4, 0.55, 0.5, 0.6] }, deps);
+		const moved = cards.find((c) => c.id === mask.id) as OcclusionCard;
+		assert.deepEqual(moved.boxes, [[0.4, 0.55, 0.5, 0.6]]);
+		assert.equal(moved.maskExact, true);
+		assert.equal(moved.edited, true);
+		assert.ok(fileOnDisk(deps, id, moved.questionFile));
+		assert.notEqual(moved.questionFile, oldQuestion);
+		assert.equal(fileOnDisk(deps, id, oldQuestion), false, "the old picture is gone");
+		assert.deepEqual((cardsOf(1).find((c) => c.id === mask.id) as OcclusionCard).boxes, moved.boxes);
+	});
+
+	it("changes the shown part of the figure for the whole group", async () => {
+		const { deps, id, cardsOf } = await focusJob();
+		const [a, b] = cardsOf(1).filter((c): c is OcclusionCard => c.type === "image_occlusion");
+		await editMask(id, a!.id, { figure: [0.1, 0.45, 0.8, 0.7] }, deps);
+		const [na, nb] = cardsOf(1).filter((c): c is OcclusionCard => c.type === "image_occlusion");
+		assert.deepEqual(na!.figureBbox, nb!.figureBbox);
+		assert.equal(na!.figureExact, true);
+		assert.ok(b);
+	});
+
+	it("refuses a card without a mask, an invalid box and a study card", async () => {
+		const { deps, id, cardsOf } = await focusJob();
+		const basic = cardsOf(1)[0]!;
+		const mask = cardsOf(1).find((c) => c.type === "image_occlusion")!;
+		await assert.rejects(editMask(id, basic.id, { bbox: [0.1, 0.1, 0.2, 0.2] }, deps), (e) => e instanceof CreateInputError && e.status === 400);
+		await assert.rejects(editMask(id, mask.id, { bbox: [0.5, 0.5, 0.4, 0.4] }, deps), (e) => e instanceof CreateInputError && e.status === 400);
+		await assert.rejects(editMask(id, mask.id, {}, deps), (e) => e instanceof CreateInputError && e.status === 400);
+		adoptCards(id, { courseId: "cardio", cardIds: [mask.id] }, deps);
+		await assert.rejects(editMask(id, mask.id, { bbox: [0.4, 0.55, 0.5, 0.6] }, deps), (e) => e instanceof CreateInputError && e.status === 409);
+	});
+
+	it("changes the shown part of a context picture", async () => {
+		const { deps, id, cardsOf } = await focusJob();
+		const picture = cardsOf(1).find((c) => c.type === "basic" && c.image) as FrontBackCard;
+		const card = (await editImage(id, picture.id, [0.2, 0.5, 0.6, 0.8], deps)) as FrontBackCard;
+		assert.deepEqual(card.image!.bbox, [0.2, 0.5, 0.6, 0.8]);
+		assert.ok(fileOnDisk(deps, id, card.image!.file));
+		assert.equal(card.edited, true);
+		await assert.rejects(editImage(id, picture.id, [0.6, 0.5, 0.2, 0.8], deps), (e) => e instanceof CreateInputError && e.status === 400);
+		const plain = cardsOf(1).find((c) => c.type === "basic" && !c.image)!;
+		await assert.rejects(editImage(id, plain.id, [0.2, 0.5, 0.6, 0.8], deps), (e) => e instanceof CreateInputError && e.status === 400);
+	});
+});
+
+describe("the page and the focus topics", () => {
+	it("serves the rendered page of a processed page only", async () => {
+		const { deps, id } = await focusJob();
+		assert.equal(pageImageFile(id, 1, deps), path.join(deps.create.workDir(id), "pages", "p001.png"));
+		assert.throws(() => pageImageFile(id, 9, deps), (e) => e instanceof CreateInputError && e.status === 404);
+		const fresh = await createCardsJob({ lectureId: "lec1", autostart: false }, deps);
+		assert.throws(() => pageImageFile(fresh.id, 1, deps), (e) => e instanceof CreateInputError && e.status === 404);
+	});
+
+	it("changes the focus topics of the job", async () => {
+		const { deps, id } = await focusJob();
+		assert.deepEqual(setFocus(id, { focusTopics: "heart failure; troponin, heart failure", focusStrict: true }, deps), { focusTopics: ["heart failure", "troponin"], focusStrict: true });
+		assert.deepEqual(setFocus(id, { focusStrict: false }, deps), { focusTopics: ["heart failure", "troponin"], focusStrict: false });
+		assert.deepEqual(getCardsJob(id, deps).settings.focusTopics, ["heart failure", "troponin"]);
+		assert.throws(() => setFocus("nope", {}, deps), (e) => e instanceof CreateInputError && e.status === 404);
+	});
+});
+
+describe("duplicates", () => {
+	const similar = [
+		{ type: "basic", front: "Which artery supplies the right ventricle wall?", back: "The right coronary artery" },
+		{ type: "basic", front: "Which artery supplies the right ventricle wall?", back: "Right coronary artery (RCA)" },
+		{ type: "basic", front: "Which vessel feeds the wall of the right ventricle?", back: "Right coronary artery" },
+	];
+
+	async function withSimilarCards(over: Partial<CardsDeps> = {}) {
+		const made = await focusJob(over);
+		for (const card of similar) await addManualCard(made.id, 2, card, made.deps);
+		return made;
+	}
+
+	it("lists the groups of similar cards and throws the others away, restorable", async () => {
+		const { deps, id, cardsOf } = await withSimilarCards();
+		const review = reviewDuplicates(id, 0.6, deps);
+		const group = review.groups.find((g) => g.cards.some((c) => c.page === 2 && (c as FrontBackCard).back === "The right coronary artery"))!;
+		assert.ok(group, "the two identically worded questions form a group");
+		const others = group.cards.filter((c) => c.id !== group.keep).map((c) => c.id);
+		assert.equal(removeDuplicates(id, [{ keep: group.keep, remove: [...others, group.keep] }], deps), others.length, "the card kept is never removed");
+		const gone = cardsOf(2).find((c) => c.id === others[0])!;
+		assert.equal(gone.deleted, true);
+		assert.equal(gone.note, `Duplicate of ${group.keep}`);
+		assert.equal(removeDuplicates(id, [{ keep: group.keep, remove: others }], deps), 0, "nothing twice");
+		assert.equal(reviewDuplicates(id, 0.6, deps).autoRemoved >= others.length, true);
+		assert.equal(patchCard(id, others[0]!, { deleted: false }, deps).deleted, false);
+	});
+
+	it("never removes a card that another group keeps, so overlapping groups cannot lose both copies", async () => {
+		const { deps, id, cardsOf } = await withSimilarCards();
+		const [a, b] = cardsOf(2).filter((c) => c.manual);
+		assert.equal(removeDuplicates(id, [{ keep: a!.id, remove: [b!.id] }, { keep: b!.id, remove: [a!.id] }], deps), 0);
+		assert.deepEqual(cardsOf(2).filter((c) => c.id === a!.id || c.id === b!.id).map((c) => c.deleted), [false, false]);
+	});
+
+	it("leaves study cards alone", async () => {
+		const { deps, id, cardsOf } = await withSimilarCards();
+		const mine = cardsOf(2).find((c) => c.manual)!;
+		adoptCards(id, { courseId: "cardio", cardIds: [mine.id] }, deps);
+		assert.equal(removeDuplicates(id, [{ keep: "p001-c01", remove: [mine.id] }], deps), 0);
+		assert.equal(cardsOf(2).find((c) => c.id === mine.id)!.deleted, false);
+	});
+
+	const dedupeAnswer = (req: AskClaudeRequest) => {
+		const pairs = [...req.prompt.matchAll(/^- (\S+) <-> (\S+)$/gm)].map((m) => [m[1]!, m[2]!]);
+		return { text: JSON.stringify({ groups: pairs.slice(0, 1) }), costUsd: 0, durationMs: 1 };
+	};
+
+	it("asks Claude about the weak candidates once, keeps the progress and offers its groups", async () => {
+		const asks: AskClaudeRequest[] = [];
+		const { deps, id } = await withSimilarCards({
+			ask: async (req) => {
+				if (req.system === DEDUPE_SYSTEM) {
+					asks.push(req);
+					return dedupeAnswer(req);
+				}
+				if (isGlossary(req)) return { text: JSON.stringify({ terms: [] }), costUsd: 0, durationMs: 1 };
+				if (isCritic(req)) return { text: JSON.stringify({ cards: [] }), costUsd: 0, durationMs: 1 };
+				return { text: FOCUS_ANSWER, costUsd: 0, durationMs: 1 };
+			},
+		});
+		const step = await semanticDedupeStep(id, { threshold: 0.95 }, deps);
+		assert.equal(step.error, null);
+		assert.equal(asks.length, 1);
+		assert.equal(asks[0]!.model, "haiku");
+		assert.ok(step.checkedNow >= 2);
+		assert.equal(step.done, true);
+		assert.equal(step.groups.length, 1);
+		assert.equal(step.groups[0]!.semantic, true);
+		assert.ok(step.groups[0]!.cards.length >= 2);
+		assert.deepEqual(semanticGroups(id, deps).map((g) => g.cards.map((c) => c.id)), step.groups.map((g) => g.cards.map((c) => c.id)));
+		assert.ok(deps.create.readDedupeCache(id).checked.length >= 2, "kept for the next time");
+
+		// every card is asked about once, never again
+		const again = await semanticDedupeStep(id, { threshold: 0.95 }, deps);
+		assert.deepEqual([again.checkedNow, again.done, asks.length], [0, true, 1]);
+
+		// a card thrown away drops out of Claude's group
+		const members = step.groups[0]!.cards.map((c) => c.id);
+		patchCard(id, members[1]!, { deleted: true }, deps);
+		assert.equal(semanticGroups(id, deps).length, 0);
+	});
+
+	it("reports a failed call and keeps the progress", async () => {
+		const { deps, id } = await withSimilarCards({
+			ask: async (req) => {
+				if (req.system === DEDUPE_SYSTEM) throw new ClaudeAskError("network down", "other");
+				if (isGlossary(req)) return { text: JSON.stringify({ terms: [] }), costUsd: 0, durationMs: 1 };
+				if (isCritic(req)) return { text: JSON.stringify({ cards: [] }), costUsd: 0, durationMs: 1 };
+				return { text: FOCUS_ANSWER, costUsd: 0, durationMs: 1 };
+			},
+		});
+		const step = await semanticDedupeStep(id, { threshold: 0.95 }, deps);
+		assert.match(step.error ?? "", /network down/);
+		assert.equal(step.done, false);
+		assert.ok(step.remaining >= 1);
+		assert.deepEqual(deps.create.readDedupeCache(id), { checked: [], groups: [] });
 	});
 });

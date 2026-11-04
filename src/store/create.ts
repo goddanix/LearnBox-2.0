@@ -5,6 +5,7 @@
  *   results/p003.json one page's drafts (McqPageResult, or CardPageResult for cards jobs)
  *   layouts/p003.json cards jobs: the page layout the cards were made from
  *   media/            cards jobs: the rendered card pictures
+ *   dedupe.json       cards jobs: the progress of Claude's content check of duplicates
  *   work/             scratch the page prompts read — rendered page images,
  *                     the second PDF's text; the Claude CLI runs inside it
  * Implements core/ports.ts CreateStore. Idioms follow the library store: sync
@@ -17,7 +18,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { PATHS } from "../../config.ts";
 import { CREATE_SCHEMA, type CreateJob, type McqPageResult } from "../core/contracts/create.ts";
-import type { CardPageResult } from "../core/contracts/create-cards.ts";
+import type { CardPageResult, DedupeCache } from "../core/contracts/create-cards.ts";
 import type { PageLayout } from "../core/contracts/page-layout.ts";
 import type { CreateStore } from "../core/ports.ts";
 
@@ -47,6 +48,7 @@ export function createCreateStore(root: string): CreateStore {
 	};
 	const jobFile = (id: string) => path.join(jobDir(id), "job.json");
 	const resultFile = (id: string, page: number) => path.join(jobDir(id), "results", `p${String(page).padStart(3, "0")}.json`);
+	const dedupeFile = (id: string) => path.join(jobDir(id), "dedupe.json");
 	const layoutFile = (id: string, page: number) => path.join(jobDir(id), "layouts", `p${String(page).padStart(3, "0")}.json`);
 
 	function get(id: string): CreateJob | null {
@@ -122,6 +124,18 @@ export function createCreateStore(root: string): CreateStore {
 			const dir = path.join(jobDir(id), "media");
 			fs.mkdirSync(dir, { recursive: true });
 			return dir;
+		},
+		readDedupeCache(id) {
+			const record = readJson(dedupeFile(id));
+			if (!isRecord(record)) return { checked: [], groups: [] };
+			const checked = Array.isArray(record.checked) ? record.checked.filter((x): x is string => typeof x === "string") : [];
+			const groups = Array.isArray(record.groups)
+				? record.groups.flatMap((g) => (isRecord(g) && Array.isArray(g.cards) ? [{ cards: g.cards.filter((x): x is string => typeof x === "string") }] : []))
+				: [];
+			return { checked, groups };
+		},
+		writeDedupeCache(id, cache) {
+			writeJson(dedupeFile(id), cache);
 		},
 	};
 }

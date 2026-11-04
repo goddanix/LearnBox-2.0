@@ -1,19 +1,13 @@
-import { CreateInputError } from "@/src/core";
-import { setCardDeleted } from "@/src/server";
+import { patchCard } from "@/src/server";
+import { bodyOf, respond } from "@/app/api/create/respond";
 
 export const dynamic = "force-dynamic";
 
-/** PATCH /api/create/jobs/:id/cards/:cid { deleted: boolean } — throw a card draft away or bring it back. */
+/**
+ * PATCH /api/create/jobs/:id/cards/:cid { front?, back?, text?, extra?, header?, label?, tier?, tags?, include?, deleted? }
+ * — change a card draft: its texts, importance, tags, whether it is selected, throw it away or bring it back.
+ */
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string; cid: string }> }) {
 	const { id, cid } = await params;
-	const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-	if (!body || typeof body.deleted !== "boolean") {
-		return Response.json({ error: "deleted (boolean) is required" }, { status: 400 });
-	}
-	try {
-		return Response.json({ card: setCardDeleted(id, cid, body.deleted) });
-	} catch (err) {
-		if (err instanceof CreateInputError) return Response.json({ error: err.message }, { status: err.status });
-		throw err;
-	}
+	return respond(async () => ({ card: patchCard(id, cid, await bodyOf(req)) }));
 }
