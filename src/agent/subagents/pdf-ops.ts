@@ -137,6 +137,48 @@ export async function pdfInfo(filePath: string): Promise<PdfInfo> {
 	};
 }
 
+/** One line of a page's text, in reading order. */
+export interface PdfTextLine {
+	/** "T001", "T002", … — the handle a prompt refers to a line by. */
+	id: string;
+	text: string;
+}
+
+/** The text of one page (1-based) as lines: items on the same baseline are joined, a
+ *  new baseline (or the item's own end-of-line mark) starts the next line; blank lines
+ *  are dropped. Empty for an out-of-range page or one without a text layer. */
+export async function pdfPageLines(filePath: string, pageNo: number): Promise<PdfTextLine[]> {
+	const { doc, task } = await openDocument(filePath);
+	try {
+		if (pageNo < 1 || pageNo > doc.numPages) return [];
+		const page = await doc.getPage(pageNo);
+		const content = await page.getTextContent();
+		const lines: string[] = [];
+		let current = "";
+		let baseline: number | null = null;
+		const flush = () => {
+			const text = current.replace(/\s+/g, " ").trim();
+			if (text) lines.push(text);
+			current = "";
+			baseline = null;
+		};
+		for (const raw of content.items as unknown[]) {
+			const item = raw as { str?: unknown; transform?: unknown; height?: unknown; hasEOL?: unknown };
+			if (typeof item.str !== "string") continue;
+			const y = Array.isArray(item.transform) && typeof item.transform[5] === "number" ? item.transform[5] : null;
+			const height = typeof item.height === "number" ? item.height : 0;
+			if (baseline !== null && y !== null && Math.abs(y - baseline) > Math.max(2, height * 0.6)) flush();
+			if (baseline === null && y !== null && item.str.trim()) baseline = y;
+			current += item.str;
+			if (item.hasEOL === true) flush();
+		}
+		flush();
+		return lines.map((text, i) => ({ id: `T${String(i + 1).padStart(3, "0")}`, text }));
+	} finally {
+		await task.destroy();
+	}
+}
+
 /** Parse 'all' | '1-5' | '1,3,7' | '3' into a sorted 1-indexed page list. */
 export function parsePageSpec(spec: string, total: number): number[] {
 	const trimmed = spec.trim().toLowerCase();

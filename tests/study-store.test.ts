@@ -79,6 +79,14 @@ describe("study store", () => {
 		assert.deepEqual(cards[0]?.tags, ["x"]);
 	});
 
+	it("keeps the tier of a card and skips a card with a tier outside 1-3", () => {
+		const s = createStudyStore(files);
+		s.upsertCards([card("t1", { tier: 1 }), card("t3", { tier: 3 }), card("none")]);
+		fs.appendFileSync(files.cards, `${JSON.stringify({ ...card("bad"), tier: 4 })}\n`);
+		const read = s.readCards();
+		assert.deepEqual(read.map((c) => [c.id, c.tier]), [["t1", 1], ["t3", 3], ["none", undefined]]);
+	});
+
 	it("a tombstone removes a record and a later upsert revives it", () => {
 		const s = createStudyStore(files);
 		s.upsertCourse(course("a"));

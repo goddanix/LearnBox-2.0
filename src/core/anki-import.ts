@@ -165,7 +165,8 @@ export function isClozeConfig(config: Uint8Array): boolean {
 const isoOf = (ms: number): string => new Date(ms).toISOString();
 const cardIdOf = (ankiCardId: number): string => `anki_${ankiCardId}`;
 
-function slug(name: string): string {
+/** A course id from its name: lower-case ASCII words joined by dashes ("Medical Biology" → "medical-biology"). */
+export function courseSlug(name: string): string {
 	const s = name
 		.normalize("NFKD")
 		.replace(/[̀-ͯ]/g, "")
@@ -301,7 +302,7 @@ export function suggestPlan(col: AnkiCollection, now: Date): SuggestedPlan {
 		const original = col.decks.find((x) => x.id === d.id);
 		const levels = deckPath(original?.name ?? d.name);
 		const top = levels[0] ?? d.name;
-		const courseId = slug(top);
+		const courseId = courseSlug(top);
 		if (!courses.has(courseId)) {
 			courses.set(courseId, { id: courseId, name: top, bufferDays: 5, createdAt: now.toISOString() });
 		}
@@ -314,7 +315,7 @@ export function suggestPlan(col: AnkiCollection, now: Date): SuggestedPlan {
 	for (const [deckId, rec] of Object.entries(col.deadlines ?? {})) {
 		const deck = col.decks.find((x) => String(x.id) === deckId);
 		const top = deck ? deckPath(deck.name)[0] : undefined;
-		const courseId = top === undefined ? undefined : slug(top);
+		const courseId = top === undefined ? undefined : courseSlug(top);
 		if (courseId === undefined || !courses.has(courseId)) continue;
 		found.set(courseId, [...(found.get(courseId) ?? []), rec]);
 	}

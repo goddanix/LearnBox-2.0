@@ -110,6 +110,7 @@ const isCard = (v: unknown): v is StudyCard =>
 	Array.isArray(v.tags) &&
 	v.tags.every(isString) &&
 	typeof v.core === "boolean" &&
+	(v.tier === undefined || v.tier === 1 || v.tier === 2 || v.tier === 3) &&
 	isOrigin(v.origin) &&
 	isString(v.createdAt) &&
 	(v.topic === undefined || isString(v.topic)) &&

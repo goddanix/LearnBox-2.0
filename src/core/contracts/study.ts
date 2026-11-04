@@ -50,6 +50,10 @@ export interface StudyCard {
 	tags: string[];
 	/** Core-knowledge card (MedAnki::Kernwissen): introduced before others. */
 	core: boolean;
+	/** How central the card is, from the PDF it came from: 1 core, 2 good to know,
+	 *  3 detail. Metadata for the Create focus screen; the queue keeps ordering by
+	 *  `core` (a tier-1 card is created with core = true). Absent on older cards. */
+	tier?: 1 | 2 | 3;
 	origin: StudyCardOrigin;
 	/** Which card of its note: the template index (basic: 0 forward, 1
 	 *  reverse) or the cloze number minus one. Absent for a one-card note. */

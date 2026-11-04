@@ -15,11 +15,13 @@ import { PATHS } from "../../config.ts";
 import type {
 	StudyCard,
 	StudyCardView,
+	StudyCourse,
 	StudyCourseSummary,
 	StudyGrade,
 	StudyNextResult,
 } from "../core/contracts/study.ts";
 import type { StudyStore } from "../core/ports.ts";
+import { courseSlug } from "../core/anki-import.ts";
 import { effectiveReviews } from "../core/fsrs.ts";
 import {
 	addDays,
@@ -84,6 +86,38 @@ export function mediaResolver(mediaDir: string): MediaResolver {
 			return null;
 		}
 	};
+}
+
+/** Add a course (Fach) by name; its id is the name's slug. A name that is taken, or a
+ *  date that is not a real calendar day, is refused. */
+export function createStudyCourse(
+	input: { name?: unknown; deadline?: unknown; bufferDays?: unknown },
+	now: Date = new Date(),
+	deps: StudyDeps = defaultDeps(),
+): StudyCourse {
+	const name = typeof input.name === "string" ? input.name.trim().replace(/\s+/g, " ") : "";
+	if (name.length === 0 || name.length > 80) throw new StudyInputError("A course needs a name of 1-80 characters", 400);
+	let deadline: string | undefined;
+	if (input.deadline !== undefined && input.deadline !== null && input.deadline !== "") {
+		const day = typeof input.deadline === "string" ? input.deadline : "";
+		const real = /^\d{4}-\d{2}-\d{2}$/.test(day) && new Date(`${day}T00:00:00Z`).toISOString().startsWith(day);
+		if (!real) throw new StudyInputError("The deadline must be a calendar date (YYYY-MM-DD)", 400);
+		deadline = day;
+	}
+	const buffer = typeof input.bufferDays === "number" && Number.isFinite(input.bufferDays) ? Math.trunc(input.bufferDays) : 5;
+	const id = courseSlug(name);
+	if (deps.store.readCourses().some((c) => c.id === id || c.name.toLowerCase() === name.toLowerCase())) {
+		throw new StudyInputError(`A course called "${name}" already exists`, 400);
+	}
+	const course: StudyCourse = {
+		id,
+		name,
+		...(deadline ? { deadline } : {}),
+		bufferDays: Math.min(60, Math.max(0, buffer)),
+		createdAt: now.toISOString(),
+	};
+	deps.store.upsertCourse(course);
+	return course;
 }
 
 /** Courses with their queue counts, for the "which course?" screen. */

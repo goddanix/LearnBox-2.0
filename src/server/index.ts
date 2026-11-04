@@ -12,6 +12,8 @@ export { NotesImportError } from "../agent/subagents/extraction.ts";
 export * from "./commit-positions.ts";
 export * from "./jobs.ts";
 export * from "./study.ts";
+export * from "./create.ts";
+export * from "./create-legacy.ts";
 export * from "./anki-import.ts";
 export * from "./stores.ts";
 export { readRenderSettings, writeRenderSettings } from "../store/render-settings.ts";

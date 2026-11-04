@@ -14,6 +14,8 @@ import type {
 	ChatRecord,
 	ChatSettings,
 	ChatSummary,
+	CreateJob,
+	McqPageResult,
 	GraphChain,
 	GraphNode,
 	JobKind,
@@ -254,4 +256,26 @@ export interface StudyStore {
 	appendReviews(reviews: readonly StudyReview[]): void;
 	/** Every review line in append order. */
 	readReviews(): StudyReview[];
+}
+
+// ─── CreateStore — Create jobs and their drafts (data/create) ────────────────
+// One folder per job: the progress record, one result file per page, and the
+// scratch the page prompts read (rendered page images). Drafts live here, apart
+// from the study ledgers, until the learner adopts them.
+
+export interface CreateStore {
+	/** Write a new job record (the folder is created). */
+	createJob(job: CreateJob): void;
+	get(id: string): CreateJob | null;
+	/** Every job, newest first. */
+	list(): CreateJob[];
+	/** Read-modify-write the record (synchronous, so no other write interleaves). Null if unknown. */
+	update(id: string, change: (job: CreateJob) => void): CreateJob | null;
+	/** Delete the job's folder; false if unknown. */
+	remove(id: string): boolean;
+	/** The job's working folder (page images, extra text), created on demand; the Claude CLI runs inside it. */
+	workDir(id: string): string;
+	readPage(id: string, page: number): McqPageResult | null;
+	/** Replace one page's drafts. */
+	writePage(id: string, result: McqPageResult): void;
 }

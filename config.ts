@@ -30,6 +30,8 @@ export const PATHS = {
 	study: path.join(DATA_ROOT, "study"),
 	/** Media files (images, audio) the study cards reference by file name. */
 	studyMedia: path.join(DATA_ROOT, "study", "media"),
+	/** Create jobs (PDF → draft study material): one folder per job (src/store/create.ts). */
+	create: path.join(DATA_ROOT, "create"),
 	/** Debug artifacts (env-gated): data/debug/provider-events/<chatId>.jsonl
 	 * raw provider stream recordings (src/agent/provider-events.ts). */
 	debug: path.join(DATA_ROOT, "debug"),

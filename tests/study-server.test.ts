@@ -11,6 +11,7 @@ import { after, describe, it } from "node:test";
 import type { StudyCard, StudyCourse } from "../src/core/contracts/study.ts";
 import {
 	StudyInputError,
+	createStudyCourse,
 	mediaResolver,
 	studyAnswer,
 	studyCardAction,
@@ -276,5 +277,36 @@ describe("study server", () => {
 		assert.equal(out.card?.fields.Correct, "A");
 		assert.match(out.card?.front ?? "", /data-key="A"/);
 		assert.doesNotMatch(out.card?.front ?? "", /data-ok/);
+	});
+});
+
+describe("adding a course", () => {
+	it("stores a course under the slug of its name, with the defaults", () => {
+		const { deps } = setup();
+		const course = createStudyCourse({ name: "  Medical   Biology " }, NOW, deps);
+		assert.deepEqual(course, { id: "medical-biology", name: "Medical Biology", bufferDays: 5, createdAt: NOW.toISOString() });
+		assert.ok(deps.store.readCourses().some((c) => c.id === "medical-biology"));
+		assert.ok(studyCourses(NOW, deps).some((c) => c.id === "medical-biology" && c.total === 0));
+	});
+
+	it("takes a real deadline and a buffer within bounds", () => {
+		const { deps } = setup();
+		const course = createStudyCourse({ name: "Physics", deadline: "2026-12-20", bufferDays: 99 }, NOW, deps);
+		assert.equal(course.deadline, "2026-12-20");
+		assert.equal(course.bufferDays, 60);
+		assert.equal(createStudyCourse({ name: "Chemistry", deadline: "" }, NOW, deps).deadline, undefined);
+	});
+
+	it("refuses an empty or long name, a taken name (any case) and a deadline that is no date", () => {
+		const { deps } = setup();
+		const refused = (input: object) => () => createStudyCourse(input, NOW, deps);
+		const bad = (e: unknown) => e instanceof StudyInputError && e.status === 400;
+		assert.throws(refused({ name: "  " }), bad);
+		assert.throws(refused({}), bad);
+		assert.throws(refused({ name: "x".repeat(81) }), bad);
+		assert.throws(refused({ name: "ANATOMIE" }), bad);
+		assert.throws(refused({ name: "A", deadline: "2026-02-30" }), bad);
+		assert.throws(refused({ name: "A", deadline: "soon" }), bad);
+		assert.equal(deps.store.readCourses().length, 2, "nothing was added");
 	});
 });
