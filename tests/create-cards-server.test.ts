@@ -18,6 +18,7 @@ import type { Box, PageLayout, PageLine } from "../src/core/contracts/page-layou
 import type { LibraryStore } from "../src/core/ports.ts";
 import {
 	adoptCards,
+	cardMediaFile,
 	createCardsJob,
 	finalizeDuplicates,
 	getCardsJob,
@@ -430,6 +431,16 @@ describe("adopting cards", () => {
 		assert.ok(made.every((c) => c.id.startsWith(`crt_${id}_`) && c.origin.kind === "pdf"));
 		const media = fs.readdirSync(studyMediaDir);
 		assert.ok(media.some((f) => f.startsWith("img_")), "the context picture reached the study media folder");
+
+		// the list can fetch the picture of a draft, and nothing else
+		const picture = cards.map((c) => (c as FrontBackCard).image?.file).find(Boolean)!;
+		assert.ok(picture, "the picture question has its context picture");
+		const served = cardMediaFile(id, picture, deps);
+		assert.equal(served.file, path.join(deps.create.mediaDir(id), picture));
+		assert.match(served.type, /^image\/(png|jpeg)$/);
+		for (const bad of ["../job.json", "job.json", ".hidden.png", "nope.png", "a/b.png"]) {
+			assert.throws(() => cardMediaFile(id, bad, deps), (e) => e instanceof CreateInputError && e.status === 404, bad);
+		}
 
 		// adopting again changes nothing
 		assert.deepEqual(adoptCards(id, { courseId: "cardio" }, deps), { adopted: 0, skipped: 2 });

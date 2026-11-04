@@ -123,6 +123,17 @@ export function getCardsJob(id: string, deps: CreateDeps = defaultCreateDeps()):
 	return { job: summarize(job), settings: job.settings, pages };
 }
 
+const MEDIA_TYPES: Record<string, string> = { ".png": "image/png", ".jpg": "image/jpeg" };
+
+/** One rendered card picture of a job (the list shows them): its file and type. Only plain names of the job's own media folder. */
+export function cardMediaFile(id: string, name: string, deps: CreateDeps = defaultCreateDeps()): { file: string; type: string } {
+	requireCards(id, deps);
+	const type = MEDIA_TYPES[path.extname(name).toLowerCase()];
+	const file = path.join(deps.create.mediaDir(id), name);
+	if (!type || !/^[A-Za-z0-9][\w.-]*$/.test(name) || !fs.existsSync(file)) throw new CreateInputError("Unknown picture", 404);
+	return { file, type };
+}
+
 // ─── creating a job ──────────────────────────────────────────────────────────
 
 export interface CreateCardsJobInput {

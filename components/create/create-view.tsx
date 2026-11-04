@@ -2,8 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FileUpIcon, SparklesIcon } from "lucide-react";
+import { CardsJobDetail } from "@/components/create/cards-job-detail";
 import { JobDetail } from "@/components/create/job-detail";
 import { LegacyImport } from "@/components/create/legacy-import";
+import { NewCardsForm } from "@/components/create/new-cards-form";
 import { NewJobForm } from "@/components/create/new-job-form";
 import { SidebarToggle } from "@/components/sidebar";
 import { studyApi as api } from "@/components/study/api";
@@ -12,9 +14,14 @@ import type { CreateJobSummary, LectureSource, StudyCourseSummary } from "@/src/
 
 /**
  * The Create area: the PDF library (the same one the lecture picker uses), the
- * jobs that turn a PDF into draft questions, and one job's drafts to adopt into
- * a course. The server holds the runs; this page only polls their progress.
+ * jobs that turn a PDF into draft flashcards or multiple-choice questions, and
+ * one job's drafts to adopt into a course. The server holds the runs; this page only polls their progress.
  */
+
+const KIND_LABEL: Record<CreateJobSummary["kind"], string> = {
+	mcq: "Multiple-choice test",
+	cards: "Flashcards",
+};
 
 const STATE_LABEL: Record<CreateJobSummary["state"], string> = {
 	queued: "Waiting",
@@ -28,8 +35,8 @@ export function CreateView() {
 	const [lectures, setLectures] = useState<LectureSource[] | null>(null);
 	const [jobs, setJobs] = useState<CreateJobSummary[] | null>(null);
 	const [courses, setCourses] = useState<StudyCourseSummary[]>([]);
-	const [openJob, setOpenJob] = useState<string | null>(null);
-	const [newFor, setNewFor] = useState<LectureSource | null>(null);
+	const [openJob, setOpenJob] = useState<{ id: string; kind: CreateJobSummary["kind"] } | null>(null);
+	const [newFor, setNewFor] = useState<{ lecture: LectureSource; kind: CreateJobSummary["kind"] } | null>(null);
 	const [uploading, setUploading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const fileInput = useRef<HTMLInputElement>(null);
@@ -87,6 +94,8 @@ export function CreateView() {
 		}
 	}
 
+	const Detail = openJob?.kind === "cards" ? CardsJobDetail : JobDetail;
+
 	return (
 		<div className="flex h-dvh flex-col" data-testid="create-view">
 			<header className="flex items-center gap-2 px-3 py-2">
@@ -104,8 +113,8 @@ export function CreateView() {
 				)}
 
 				{openJob ? (
-					<JobDetail
-						jobId={openJob}
+					<Detail
+						jobId={openJob.id}
 						courses={courses}
 						onBack={() => {
 							setOpenJob(null);
@@ -117,16 +126,18 @@ export function CreateView() {
 				) : (
 					<>
 						{newFor && lectures && (
-							<NewJobForm
-								lecture={newFor}
-								lectures={lectures}
-								onCancel={() => setNewFor(null)}
-								onCreated={(job) => {
+							(() => {
+								const created = (job: CreateJobSummary) => {
 									setNewFor(null);
-									setOpenJob(job.id);
+									setOpenJob({ id: job.id, kind: job.kind });
 									void loadJobs();
-								}}
-							/>
+								};
+								return newFor.kind === "cards" ? (
+									<NewCardsForm lecture={newFor.lecture} onCancel={() => setNewFor(null)} onCreated={created} />
+								) : (
+									<NewJobForm lecture={newFor.lecture} lectures={lectures} onCancel={() => setNewFor(null)} onCreated={created} />
+								);
+							})()
 						)}
 
 						<section className="flex flex-col gap-2" data-testid="create-library">
@@ -157,7 +168,10 @@ export function CreateView() {
 										<span className="truncate text-base">{l.title}</span>
 										<span className="text-xs text-muted-foreground">{l.pages ?? "?"} pages</span>
 									</span>
-									<Button variant="outline" size="sm" onClick={() => setNewFor(l)} data-testid="create-mcq">
+									<Button variant="outline" size="sm" onClick={() => setNewFor({ lecture: l, kind: "cards" })} data-testid="create-cards">
+										Flashcards
+									</Button>
+									<Button variant="outline" size="sm" onClick={() => setNewFor({ lecture: l, kind: "mcq" })} data-testid="create-mcq">
 										Multiple-choice test
 									</Button>
 								</div>
@@ -172,12 +186,14 @@ export function CreateView() {
 									key={j.id}
 									type="button"
 									data-testid="create-job"
-									onClick={() => setOpenJob(j.id)}
+									onClick={() => setOpenJob({ id: j.id, kind: j.kind })}
 									className="flex flex-col gap-1.5 rounded-lg border bg-card px-4 py-3 text-left transition-colors hover:bg-accent"
 								>
 									<span className="flex items-center gap-2">
 										<span className="min-w-0 flex-1 truncate text-base">{j.name}</span>
-										<span className="text-xs text-muted-foreground">{STATE_LABEL[j.state]}</span>
+										<span className="text-xs text-muted-foreground">
+											{KIND_LABEL[j.kind]} · {STATE_LABEL[j.state]}
+										</span>
 									</span>
 									<span className="h-1 overflow-hidden rounded-full bg-muted" aria-hidden>
 										<span className="block h-full bg-sky-400 transition-all" style={{ width: `${j.total === 0 ? 0 : (100 * j.counts.done) / j.total}%` }} />
