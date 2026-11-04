@@ -9,36 +9,65 @@
  * (same card + instant) are not appended twice.
  */
 
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { PATHS } from "../../config.ts";
 import {
+	ImportPlanError,
 	inspectCollection,
 	mapCollection,
+	parseImportPlan,
 	suggestPlan,
-	type AnkiInspection,
-	type ImportPlan,
-	type ImportReport,
+	type AnkiCandidate,
+	type ImportOutcome,
+	type InspectResult,
 } from "../core/anki-import.ts";
 import type { StudyStore } from "../core/ports.ts";
-import { copyAnkiMedia, readAnkiCollection, type MediaCopyResult } from "../store/anki-source.ts";
+import { copyAnkiMedia, findAnkiCollections, readAnkiCollection } from "../store/anki-source.ts";
+import { StudyInputError } from "./study.ts";
 import { studyStore } from "../store/study.ts";
 
-export interface InspectResult {
-	inspection: AnkiInspection;
-	/** A starting point for the deck → course mapping the owner edits. */
-	suggestedPlan: ImportPlan;
+/** Anki collections found under Anki's data folder, one per profile. */
+export function listAnkiCollections(base?: string): AnkiCandidate[] {
+	return findAnkiCollections(base);
 }
 
-export function inspectAnki(collectionPath: string, now: Date = new Date()): InspectResult {
-	const col = readAnkiCollection(collectionPath);
-	return { inspection: inspectCollection(col), suggestedPlan: suggestPlan(col, now) };
+/** A request path must be an existing `.anki2` file; nothing else is ever opened. */
+function collectionFile(input: unknown): string {
+	if (typeof input !== "string" || input.length === 0 || !path.isAbsolute(input)) {
+		throw new StudyInputError("Collection path must be absolute", 400);
+	}
+	if (path.extname(input).toLowerCase() !== ".anki2") {
+		throw new StudyInputError("That is not an Anki collection (.anki2)", 400);
+	}
+	let isFile = false;
+	try {
+		isFile = fs.statSync(input).isFile();
+	} catch {
+		// falls through to the error below
+	}
+	if (!isFile) throw new StudyInputError("Collection file not found", 404);
+	return input;
 }
 
-export interface ImportOutcome {
-	report: ImportReport;
-	added: { courses: number; cards: number; reviews: number };
-	alreadyImported: { cards: number; reviews: number };
-	media: MediaCopyResult;
+/** Read a collection the owner chose: the decks, the note types and a suggested plan. */
+export function inspectAnki(
+	collectionPath: unknown,
+	now: Date = new Date(),
+	store: StudyStore = studyStore,
+): InspectResult {
+	const file = collectionFile(collectionPath);
+	let col;
+	try {
+		col = readAnkiCollection(file);
+	} catch (err) {
+		throw new StudyInputError(err instanceof Error ? err.message : "Could not read the collection", 400);
+	}
+	return {
+		inspection: inspectCollection(col),
+		suggestedPlan: suggestPlan(col, now),
+		existingCourses: store.readCourses().map((c) => ({ id: c.id, name: c.name })),
+	};
 }
 
 export interface ImportOptions {
@@ -50,15 +79,23 @@ export interface ImportOptions {
 }
 
 export function runAnkiImport(
-	collectionPath: string,
-	plan: ImportPlan,
+	collectionPath: unknown,
+	rawPlan: unknown,
 	options: ImportOptions = {},
 ): ImportOutcome {
 	const store = options.store ?? studyStore;
-	const mediaDir = options.mediaDir ?? path.join(path.dirname(collectionPath), "collection.media");
+	const file = collectionFile(collectionPath);
+	let plan;
+	try {
+		plan = parseImportPlan(rawPlan, new Set(store.readCourses().map((c) => c.id)), new Date());
+	} catch (err) {
+		if (err instanceof ImportPlanError) throw new StudyInputError(err.message, 400);
+		throw err;
+	}
+	const mediaDir = options.mediaDir ?? path.join(path.dirname(file), "collection.media");
 	const mediaDest = options.mediaDest ?? PATHS.studyMedia;
 
-	const col = readAnkiCollection(collectionPath);
+	const col = readAnkiCollection(file);
 	const mapped = mapCollection(col, plan);
 
 	const haveCourses = new Set(store.readCourses().map((c) => c.id));

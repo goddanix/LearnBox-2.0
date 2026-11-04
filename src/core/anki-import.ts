@@ -71,12 +71,45 @@ export interface AnkiRevlogRow {
 	/** Answer time in ms. */
 	time: number;
 }
+/** One Deadline Scheduler record (collection config `deadline_scheduler_deadlines`, by deck id). */
+export interface AnkiSchedulerDeadline {
+	/** Exam day, "YYYY-MM-DD". */
+	deadline: string;
+	bufferDays: number;
+	/** Manual new-cards-per-day override, when the owner set one. */
+	newPerDay?: number;
+}
 export interface AnkiCollection {
 	decks: AnkiDeckRow[];
 	noteTypes: AnkiNoteTypeRow[];
 	notes: AnkiNoteRow[];
 	cards: AnkiCardRow[];
 	revlog: AnkiRevlogRow[];
+	/** The Deadline Scheduler's records by deck id (as a string); absent = none. */
+	deadlines?: Record<string, AnkiSchedulerDeadline>;
+}
+
+const isoDay = (v: unknown): v is string =>
+	typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`));
+
+/** The Scheduler's config object → clean records. Tolerant: anything malformed,
+ *  and records the Scheduler marked `expired`, are dropped. */
+export function parseSchedulerDeadlines(raw: unknown): Record<string, AnkiSchedulerDeadline> {
+	const out: Record<string, AnkiSchedulerDeadline> = {};
+	if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return out;
+	for (const [deckId, value] of Object.entries(raw)) {
+		if (typeof value !== "object" || value === null) continue;
+		const r = value as Record<string, unknown>;
+		if (r.expired === true || !isoDay(r.deadline)) continue;
+		const buffer = typeof r.buffer_days === "number" && Number.isFinite(r.buffer_days) ? Math.trunc(r.buffer_days) : 5;
+		const perDay = typeof r.new_per_day === "number" && Number.isFinite(r.new_per_day) ? Math.trunc(r.new_per_day) : 0;
+		out[deckId] = {
+			deadline: r.deadline,
+			bufferDays: Math.min(60, Math.max(0, buffer)),
+			...(perDay >= 1 ? { newPerDay: perDay } : {}),
+		};
+	}
+	return out;
 }
 
 // ─── small pure helpers ─────────────────────────────────────────────────────
@@ -254,8 +287,14 @@ export function inspectCollection(col: AnkiCollection): AnkiInspection {
 	return { decks, noteTypes, cards: col.cards.length, reviews: importable };
 }
 
-/** A starting point for the owner: top-level deck = course, the rest = topic. */
-export function suggestPlan(col: AnkiCollection, now: Date): ImportPlan {
+export interface SuggestedPlan extends ImportPlan {
+	/** Things the owner should know about the suggestion (never silent). */
+	hints: string[];
+}
+
+/** A starting point for the owner: top-level deck = course, the rest = topic;
+ *  a course takes the (earliest) Deadline Scheduler deadline of its decks. */
+export function suggestPlan(col: AnkiCollection, now: Date): SuggestedPlan {
 	const courses = new Map<string, StudyCourse>();
 	const decks: ImportPlan["decks"] = {};
 	for (const d of inspectCollection(col).decks) {
@@ -269,7 +308,136 @@ export function suggestPlan(col: AnkiCollection, now: Date): ImportPlan {
 		const topic = levels.slice(1).join("::");
 		decks[String(d.id)] = topic.length > 0 ? { courseId, topic } : { courseId };
 	}
-	return { courses: [...courses.values()], decks };
+
+	const hints: string[] = [];
+	const found = new Map<string, AnkiSchedulerDeadline[]>();
+	for (const [deckId, rec] of Object.entries(col.deadlines ?? {})) {
+		const deck = col.decks.find((x) => String(x.id) === deckId);
+		const top = deck ? deckPath(deck.name)[0] : undefined;
+		const courseId = top === undefined ? undefined : slug(top);
+		if (courseId === undefined || !courses.has(courseId)) continue;
+		found.set(courseId, [...(found.get(courseId) ?? []), rec]);
+	}
+	for (const [courseId, recs] of found) {
+		const course = courses.get(courseId)!;
+		const earliest = [...recs].sort((a, b) => a.deadline.localeCompare(b.deadline))[0]!;
+		course.deadline = earliest.deadline;
+		course.bufferDays = earliest.bufferDays;
+		if (earliest.newPerDay !== undefined) course.newPerDay = earliest.newPerDay;
+		const distinct = [...new Set(recs.map((r) => r.deadline))].sort();
+		if (distinct.length > 1) {
+			hints.push(
+				`${course.name}: ${distinct.length} decks have different Scheduler deadlines (${distinct.join(", ")}); using the earliest.`,
+			);
+		}
+	}
+	return { courses: [...courses.values()], decks, hints };
+}
+
+// ─── wire types (GET/POST /api/study/anki/*) ────────────────────────────────
+
+export interface AnkiCandidate {
+	/** The Anki profile folder's name, e.g. "Benutzer 1". */
+	profile: string;
+	path: string;
+	sizeBytes: number;
+	modified: string;
+}
+
+export interface MediaCopyResult {
+	copied: string[];
+	/** Referenced by a card but absent from the media folder. */
+	missing: string[];
+	/** Already present in the destination (kept as is). */
+	existing: string[];
+}
+
+export interface InspectResult {
+	inspection: AnkiInspection;
+	/** A starting point for the deck → course mapping the owner edits. */
+	suggestedPlan: SuggestedPlan;
+	/** Courses already in the study store (valid targets, never altered). */
+	existingCourses: { id: string; name: string }[];
+}
+
+export interface ImportOutcome {
+	report: ImportReport;
+	added: { courses: number; cards: number; reviews: number };
+	alreadyImported: { cards: number; reviews: number };
+	media: MediaCopyResult;
+}
+
+// ─── the plan arriving from the UI ──────────────────────────────────────────
+
+/** The owner's plan was malformed (the UI should never send one; a stale or hand-made request can). */
+export class ImportPlanError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = "ImportPlanError";
+	}
+}
+
+const COURSE_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * Validate a plan from the wire into a clean `ImportPlan`: course ids are
+ * file-safe slugs, names non-empty, deadlines real dates, every deck points at
+ * a course the import creates or that already exists. Throws ImportPlanError.
+ */
+export function parseImportPlan(raw: unknown, existingCourseIds: ReadonlySet<string>, now: Date): ImportPlan {
+	const obj = (v: unknown, what: string): Record<string, unknown> => {
+		if (typeof v !== "object" || v === null || Array.isArray(v)) throw new ImportPlanError(`${what} must be an object`);
+		return v as Record<string, unknown>;
+	};
+	const plan = obj(raw, "plan");
+	if (!Array.isArray(plan.courses) || plan.courses.length > 200) throw new ImportPlanError("plan.courses must be a list");
+	const courses: StudyCourse[] = [];
+	const ids = new Set<string>();
+	for (const entry of plan.courses) {
+		const c = obj(entry, "course");
+		const id = c.id;
+		if (typeof id !== "string" || !COURSE_ID.test(id)) throw new ImportPlanError("course id must be letters, digits, - or _");
+		if (ids.has(id)) throw new ImportPlanError(`duplicate course id ${id}`);
+		ids.add(id);
+		const name = typeof c.name === "string" ? c.name.trim() : "";
+		if (name.length === 0 || name.length > 120) throw new ImportPlanError(`course ${id} needs a name`);
+		if (c.deadline !== undefined && c.deadline !== null && !isoDay(c.deadline)) {
+			throw new ImportPlanError(`course ${name}: deadline must be YYYY-MM-DD`);
+		}
+		const buffer = c.bufferDays === undefined ? 5 : c.bufferDays;
+		if (typeof buffer !== "number" || !Number.isInteger(buffer) || buffer < 0 || buffer > 60) {
+			throw new ImportPlanError(`course ${name}: buffer must be 0-60 days`);
+		}
+		const perDay = c.newPerDay;
+		if (perDay !== undefined && perDay !== null && (typeof perDay !== "number" || !Number.isInteger(perDay) || perDay < 1 || perDay > 1000)) {
+			throw new ImportPlanError(`course ${name}: new cards per day must be 1-1000`);
+		}
+		courses.push({
+			id,
+			name,
+			...(typeof c.deadline === "string" ? { deadline: c.deadline } : {}),
+			bufferDays: buffer,
+			...(typeof perDay === "number" ? { newPerDay: perDay } : {}),
+			createdAt: now.toISOString(),
+		});
+	}
+	const decks: ImportPlan["decks"] = {};
+	for (const [deckId, target] of Object.entries(obj(plan.decks, "plan.decks"))) {
+		if (!/^\d+$/.test(deckId)) throw new ImportPlanError(`bad deck id ${deckId}`);
+		if (target === null) {
+			decks[deckId] = null;
+			continue;
+		}
+		const t = obj(target, "deck target");
+		const courseId = t.courseId;
+		if (typeof courseId !== "string" || !(ids.has(courseId) || existingCourseIds.has(courseId))) {
+			throw new ImportPlanError(`deck ${deckId} points at an unknown course`);
+		}
+		const topic = typeof t.topic === "string" ? t.topic.trim() : "";
+		if (topic.length > 200) throw new ImportPlanError(`deck ${deckId}: topic is too long`);
+		decks[deckId] = topic.length > 0 ? { courseId, topic } : { courseId };
+	}
+	return { courses, decks };
 }
 
 // ─── the mapping ────────────────────────────────────────────────────────────

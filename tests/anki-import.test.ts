@@ -24,14 +24,18 @@ import {
 	isClozeConfig,
 	mapCollection,
 	mapNoteType,
+	ImportPlanError,
 	mediaRefs,
+	parseImportPlan,
+	parseSchedulerDeadlines,
 	suggestPlan,
 	type AnkiCollection,
 	type AnkiNoteTypeRow,
 } from "../src/core/anki-import.ts";
 import { replay } from "../src/core/fsrs.ts";
-import { copyAnkiMedia, readAnkiCollection } from "../src/store/anki-source.ts";
-import { inspectAnki, runAnkiImport } from "../src/server/anki-import.ts";
+import { copyAnkiMedia, findAnkiCollections, readAnkiCollection } from "../src/store/anki-source.ts";
+import { inspectAnki, listAnkiCollections, runAnkiImport } from "../src/server/anki-import.ts";
+import { StudyInputError } from "../src/server/study.ts";
 import { createStudyStore, type StudyFiles } from "../src/store/study.ts";
 
 const FIXTURE = path.resolve(import.meta.dirname, "fixtures", "anki", "collection.anki2");
@@ -272,5 +276,142 @@ describe("anki-import against a real Anki collection", () => {
 		assert.deepEqual(second.existing, ["arm.png"]);
 		assert.equal(fs.readFileSync(path.join(dest, "arm.png"), "utf8"), "mine");
 		assert.equal(fs.existsSync(path.join(root, "collection.anki2")), false);
+	});
+});
+
+describe("Deadline Scheduler deadlines and the import plan from the UI", () => {
+	const NOW = new Date("2026-11-04T00:00:00Z");
+	const rec = (deadline: string, over: Record<string, unknown> = {}) => ({ deadline, buffer_days: 3, ...over });
+
+	it("parses the Scheduler's config tolerantly and drops expired or malformed records", () => {
+		const out = parseSchedulerDeadlines({
+			"1": rec("2026-12-24", { new_per_day: 12, preset_id: 5 }),
+			"2": rec("2026-12-31", { expired: true }),
+			"3": rec("24.12.2026"),
+			"4": "nonsense",
+			"5": rec("2027-01-10", { buffer_days: 999 }),
+		});
+		assert.deepEqual(out, {
+			"1": { deadline: "2026-12-24", bufferDays: 3, newPerDay: 12 },
+			"5": { deadline: "2027-01-10", bufferDays: 60 },
+		});
+		assert.deepEqual(parseSchedulerDeadlines(null), {});
+		assert.deepEqual(parseSchedulerDeadlines([1]), {});
+	});
+
+	const col = (deadlines: AnkiCollection["deadlines"]): AnkiCollection => ({
+		decks: [
+			{ id: 1, name: "Anatomie" },
+			{ id: 2, name: "Anatomie\u001fArm" },
+			{ id: 3, name: "Physio" },
+		],
+		noteTypes: [noteType({ id: 1, name: "Basic", fields: ["Front", "Back"] })],
+		notes: [{ id: 100, mid: 1, tags: "", flds: "q\u001fa" }],
+		cards: [
+			{ id: 1, nid: 100, did: 2, ord: 0, queue: 0, odid: 0 },
+			{ id: 2, nid: 100, did: 3, ord: 0, queue: 0, odid: 0 },
+		],
+		revlog: [],
+		deadlines,
+	});
+
+	it("a course takes the deadline of its parent deck, even when the parent has no cards of its own", () => {
+		const plan = suggestPlan(col({ "1": { deadline: "2026-12-24", bufferDays: 4, newPerDay: 9 } }), NOW);
+		const anatomie = plan.courses.find((c) => c.id === "anatomie");
+		assert.equal(anatomie?.deadline, "2026-12-24");
+		assert.equal(anatomie?.bufferDays, 4);
+		assert.equal(anatomie?.newPerDay, 9);
+		assert.equal(plan.courses.find((c) => c.id === "physio")?.deadline, undefined);
+		assert.deepEqual(plan.hints, []);
+	});
+
+	it("different deadlines in one course: the earliest wins, with a hint", () => {
+		const plan = suggestPlan(
+			col({ "1": { deadline: "2027-01-15", bufferDays: 5 }, "2": { deadline: "2026-12-24", bufferDays: 2 } }),
+			NOW,
+		);
+		const anatomie = plan.courses.find((c) => c.id === "anatomie");
+		assert.equal(anatomie?.deadline, "2026-12-24");
+		assert.equal(anatomie?.bufferDays, 2);
+		assert.equal(plan.hints.length, 1);
+		assert.match(plan.hints[0] ?? "", /Anatomie.*2026-12-24, 2027-01-15.*earliest/);
+	});
+
+	it("reads the Scheduler record from a collection's config table", () => {
+		const copy = path.join(root, "with-deadline.anki2");
+		fs.copyFileSync(FIXTURE, copy);
+		const sqlite = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
+		const db = new sqlite.DatabaseSync(copy);
+		// decks.name carries Anki's custom "unicase" collation, so filter outside SQL
+		const anatomie = (db.prepare("select id, name from decks").all() as { id: number; name: string }[]).find(
+			(d) => d.name === "Anatomie",
+		)!.id;
+		db.prepare("insert into config (key, usn, mtime_secs, val) values (?, 0, 0, ?)").run(
+			"deadline_scheduler_deadlines",
+			Buffer.from(JSON.stringify({ [String(anatomie)]: rec("2026-12-24") })),
+		);
+		db.close();
+		assert.deepEqual(readAnkiCollection(copy).deadlines, { [String(anatomie)]: { deadline: "2026-12-24", bufferDays: 3 } });
+		const { suggestedPlan, existingCourses } = inspectAnki(copy, NOW, fresh().store);
+		assert.equal(suggestedPlan.courses.find((c) => c.id === "anatomie")?.deadline, "2026-12-24");
+		assert.deepEqual(existingCourses, []);
+		assert.deepEqual(readAnkiCollection(FIXTURE).deadlines, {});
+	});
+
+	it("lists the collections of every profile folder and ignores the rest", () => {
+		const base = path.join(root, "Anki2");
+		for (const p of ["Benutzer 1", "Zweit", "addons21", "logs"]) fs.mkdirSync(path.join(base, p), { recursive: true });
+		fs.copyFileSync(FIXTURE, path.join(base, "Benutzer 1", "collection.anki2"));
+		fs.writeFileSync(path.join(base, "Zweit", "collection.anki2"), "x");
+		fs.writeFileSync(path.join(base, "prefs21.db"), "x");
+		const found = findAnkiCollections(base);
+		assert.deepEqual(found.map((c) => c.profile), ["Benutzer 1", "Zweit"]);
+		assert.equal(found[1]?.sizeBytes, 1);
+		assert.equal(listAnkiCollections(path.join(root, "does-not-exist")).length, 0);
+	});
+
+	const valid = {
+		courses: [{ id: "anatomie", name: " Anatomie ", deadline: "2026-12-24", bufferDays: 3, newPerDay: 10, createdAt: "x" }],
+		decks: { "5": { courseId: "anatomie", topic: " Arm " }, "6": null, "7": { courseId: "old" } },
+	};
+
+	it("accepts a plan from the UI and cleans it; an existing course is a valid target", () => {
+		const plan = parseImportPlan(valid, new Set(["old"]), NOW);
+		assert.deepEqual(plan.courses, [
+			{ id: "anatomie", name: "Anatomie", deadline: "2026-12-24", bufferDays: 3, newPerDay: 10, createdAt: NOW.toISOString() },
+		]);
+		assert.deepEqual(plan.decks, { "5": { courseId: "anatomie", topic: "Arm" }, "6": null, "7": { courseId: "old" } });
+	});
+
+	it("rejects malformed plans", () => {
+		const bad = (mutate: (p: any) => void, re: RegExp) => {
+			const p = structuredClone(valid);
+			mutate(p);
+			assert.throws(() => parseImportPlan(p, new Set(["old"]), NOW), (e) => e instanceof ImportPlanError && re.test(e.message));
+		};
+		bad((p) => (p.courses[0].id = "../x"), /course id/);
+		bad((p) => (p.courses[0].name = "  "), /needs a name/);
+		bad((p) => (p.courses[0].deadline = "24.12.2026"), /deadline/);
+		bad((p) => (p.courses[0].bufferDays = -1), /buffer/);
+		bad((p) => (p.courses[0].newPerDay = 0), /per day/);
+		bad((p) => p.courses.push({ id: "anatomie", name: "dup" }), /duplicate/);
+		bad((p) => (p.decks["5"] = { courseId: "ghost" }), /unknown course/);
+		bad((p) => (p.decks["x"] = null), /bad deck id/);
+		assert.throws(() => parseImportPlan("nope", new Set(), NOW), ImportPlanError);
+	});
+
+	it("the server only opens existing .anki2 files and rejects a bad plan before writing anything", () => {
+		const { store, mediaDest } = fresh();
+		const status = (code: number) => (e: unknown) => e instanceof StudyInputError && e.status === code;
+		assert.throws(() => inspectAnki("relative/collection.anki2"), status(400));
+		assert.throws(() => inspectAnki(path.join(root, "x.sqlite")), status(400));
+		assert.throws(() => inspectAnki(path.join(root, "missing.anki2")), status(404));
+		assert.throws(() => inspectAnki(42), status(400));
+		const junk = path.join(root, "junk2.anki2");
+		fs.writeFileSync(junk, "not sqlite");
+		assert.throws(() => inspectAnki(junk), status(400));
+		assert.throws(() => runAnkiImport(FIXTURE, { courses: [], decks: { "1": { courseId: "ghost" } } }, { store, mediaDest }), status(400));
+		assert.equal(store.readCards().length, 0);
+		assert.equal(store.readCourses().length, 0);
 	});
 });

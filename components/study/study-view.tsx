@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeftIcon, GraduationCapIcon } from "lucide-react";
+import { useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
+import { STUDY_CHANGED } from "@/components/settings/study-section.tsx";
 import { SidebarToggle } from "@/components/sidebar";
+import { studyApi as api, postJson } from "@/components/study/api";
 import { Button } from "@/components/ui/button";
 import { cardDocument } from "@/src/core";
 import type { StudyCardView, StudyCourseSummary, StudyGrade, StudyNextResult, StudyQueueCounts } from "@/src/core";
@@ -21,15 +24,6 @@ const GRADES: { grade: StudyGrade; label: string; tone: string }[] = [
 	{ grade: 4, label: "Easy", tone: "text-sky-400" },
 ];
 
-async function api<T>(url: string, init?: RequestInit): Promise<T> {
-	const res = await fetch(url, init);
-	if (!res.ok) {
-		const body = (await res.json().catch(() => null)) as { error?: string } | null;
-		throw new Error(body?.error ?? `Request failed (${res.status})`);
-	}
-	return (await res.json()) as T;
-}
-
 export function StudyView() {
 	const [courses, setCourses] = useState<StudyCourseSummary[] | null>(null);
 	const [active, setActive] = useState<StudyCourseSummary | null>(null);
@@ -47,6 +41,9 @@ export function StudyView() {
 
 	useEffect(() => {
 		void loadCourses();
+		const onChanged = () => void loadCourses();
+		window.addEventListener(STUDY_CHANGED, onChanged);
+		return () => window.removeEventListener(STUDY_CHANGED, onChanged);
 	}, [loadCourses]);
 
 	return (
@@ -95,6 +92,7 @@ function CoursePicker({
 	error: string | null;
 	onPick: (c: StudyCourseSummary) => void;
 }) {
+	const { open: openSettings } = useSettingsDialog();
 	return (
 		<>
 			<header className="flex items-center gap-2 px-3 py-2">
@@ -114,6 +112,9 @@ function CoursePicker({
 				{courses?.length === 0 && (
 					<p className="rounded-md border p-4 text-sm text-muted-foreground" data-testid="study-empty">
 						No courses yet. Import your Anki collection or create cards from a PDF, and they show up here.
+						<Button variant="outline" size="sm" className="mt-3 block" onClick={() => openSettings("study")}>
+							Import from Anki…
+						</Button>
 					</p>
 				)}
 				{courses?.map((c) => (
@@ -178,17 +179,16 @@ function Session({ course, onExit }: { course: StudyCourseSummary; onExit: () =>
 			if (!state?.card || busy) return;
 			setBusy(true);
 			try {
-				const next = await api<StudyNextResult>("/api/study/answer", {
-					method: "POST",
-					headers: { "Content-Type": "application/json" },
-					body: JSON.stringify({
+				const next = await api<StudyNextResult>(
+					"/api/study/answer",
+					postJson({
 						courseId: course.id,
 						cardId: state.card.id,
 						grade,
 						ms: Date.now() - shownAt.current,
 						step: state.step,
 					}),
-				});
+				);
 				answered.current += 1;
 				show(next);
 				setError(null);
