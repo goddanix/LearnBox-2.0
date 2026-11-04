@@ -11,6 +11,8 @@ import {
 	cardSystemPrompt,
 	CRITIC_SYSTEM,
 	criticPrompt,
+	DEDUPE_SYSTEM,
+	dedupePrompt,
 	fixed3,
 	focusHint,
 	glossaryHint,
@@ -62,6 +64,11 @@ describe("card prompts match MedAnki's", () => {
 	it("critic prompts", () => {
 		assert.equal(CRITIC_SYSTEM, golden.criticSystem);
 		assert.equal(criticPrompt(golden.criticPrompt.pageText, golden.criticPrompt.cards), golden.criticPrompt.text);
+	});
+
+	it("duplicate-check prompts", () => {
+		assert.equal(DEDUPE_SYSTEM, golden.dedupeSystem);
+		assert.equal(dedupePrompt(golden.dedupePrompt.cards, golden.dedupePrompt.pairs), golden.dedupePrompt.text);
 	});
 
 	it("repair suffix", () => {

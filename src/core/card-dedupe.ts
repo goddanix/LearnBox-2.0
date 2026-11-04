@@ -9,11 +9,11 @@
  *  - an occlusion is a duplicate only when label AND mask position agree (same
  *    page), or label AND the figure with the mask position (across pages, by
  *    picture hash) — the same label in two places of one picture stays.
- * Ported from MedAnki's medanki/dedupe.py (the Claude-assisted stage comes with
- * the focus screen).
+ * Ported from MedAnki's medanki/dedupe.py, including the candidates for the
+ * Claude-assisted content check (`weakCandidates`).
  */
 
-import type { CardDraft, DuplicateGroup } from "./contracts/create-cards.ts";
+import type { CardDraft, DuplicateGroup, OcclusionCard } from "./contracts/create-cards.ts";
 import type { Box } from "./contracts/page-layout.ts";
 import { bboxOverlapRatio, CLOZE_RE, clozePlain, jaccard, norm, tokens } from "./card-util.ts";
 
@@ -266,4 +266,78 @@ export function autoMark(pages: readonly { cards: readonly CardDraft[] }[], thre
 		}
 	}
 	return n;
+}
+
+
+// ─── candidates for the content check by Claude ──────────────────────────────
+
+/** Lower bound of a text pair worth a content check — below it they share too little. */
+const WEAK_LOW = 0.25;
+/** Occlusions: label similarity from which a content check pays off. */
+const OCC_LABEL_LOW = 0.55;
+
+/** What Claude sees of a card for the duplicate check: text only (like the critic's brief, without the warnings). */
+export function dedupeBrief(c: CardDraft): Record<string, unknown> {
+	if (c.type === "cloze") return { id: c.id, type: c.type, text: c.text };
+	if (c.type === "image_occlusion") return { id: c.id, type: c.type, header: c.header, label: c.label };
+	return { id: c.id, type: c.type, front: c.front, back: c.back };
+}
+
+export interface WeakPair {
+	a: CardDraft;
+	b: CardDraft;
+	score: number;
+	kind: "text" | "occlusion";
+}
+
+/**
+ * Pairs too weak for `findGroups` but possibly the same fact — another wording of the same question, or (occlusions)
+ * the same label at a quite different place of a figure, which `findGroups` leaves alone on purpose. Claude judges these.
+ */
+export function weakCandidates(pages: readonly { cards: readonly CardDraft[] }[], threshold: number): WeakPair[] {
+	const cards = pages.flatMap((p) => p.cards).filter((c) => !c.deleted);
+	const profs = cards.map(profile);
+	const out: WeakPair[] = [];
+	for (const { i, j, verdict } of buildEdges(profs, WEAK_LOW).values()) {
+		if (profs[i]!.kind === "text" && verdict.score >= WEAK_LOW && verdict.score < threshold) out.push({ a: cards[i]!, b: cards[j]!, score: verdict.score, kind: "text" });
+	}
+	const occ = cards.filter((c): c is OcclusionCard => c.type === "image_occlusion" && c.label.trim() !== "");
+	for (let x = 0; x < occ.length; x++) {
+		const ca = occ[x]!;
+		const na = norm(ca.label);
+		const ta = tokens(ca.label);
+		for (let y = x + 1; y < occ.length; y++) {
+			const cb = occ[y]!;
+			const boxA = ca.boxes[0];
+			const boxB = cb.boxes[0];
+			if (boxA && boxB && ca.page === cb.page && boxA.join(",") === boxB.join(",")) continue; // the very same mask: findGroups has it
+			const score = na === norm(cb.label) ? 1 : jaccard(ta, tokens(cb.label));
+			if (score >= OCC_LABEL_LOW) out.push({ a: ca, b: cb, score: Math.round(score * 1000) / 1000, kind: "occlusion" });
+		}
+	}
+	return out;
+}
+
+/**
+ * Claude's groups (card ids, kept in the job's cache) as groups for the review. Cards thrown away or gone since
+ * drop out, and a group left with one card disappears. The recommended card comes first.
+ */
+export function resolveSemanticGroups(groups: readonly { cards: readonly string[] }[], cards: readonly CardDraft[]): DuplicateGroup[] {
+	const byId = new Map(cards.filter((c) => !c.deleted).map((c) => [c.id, c]));
+	const out: DuplicateGroup[] = [];
+	groups.forEach((g, n) => {
+		const found = [...new Set(g.cards)].flatMap((id) => byId.get(id) ?? []);
+		if (found.length < 2) return;
+		const ordered = [...found].sort((a, b) => compareRanks(keepRank(a), keepRank(b)));
+		out.push({
+			id: `s${n + 1}`,
+			kind: ordered[0]!.type === "image_occlusion" ? "occlusion" : "text",
+			reason: "same concept (checked by Claude)",
+			score: 0.85,
+			keep: ordered[0]!.id,
+			cards: ordered,
+			semantic: true,
+		});
+	});
+	return out;
 }

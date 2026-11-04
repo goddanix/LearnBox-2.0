@@ -64,7 +64,7 @@ function newBase(page: number, raw: Record<string, unknown>): CardBaseInit {
 }
 
 /** A front/back card from a raw one; null with the reason when it is unusable. */
-function normalizeTextCard(raw: Record<string, unknown>, base: CardBaseInit, ctype: string, layout: Pick<PageLayout, "figures">): { card: FrontBackCard | null; reason: string } {
+export function normalizeTextCard(raw: Record<string, unknown>, base: CardBaseInit, ctype: string, layout: Pick<PageLayout, "figures">): { card: FrontBackCard | null; reason: string } {
 	const front = cleanText(raw.front);
 	const back = cleanText(raw.back);
 	if (!front || !back) return { card: null, reason: "Front or back is empty" };

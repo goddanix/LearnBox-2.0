@@ -96,6 +96,12 @@ BRIEF = [
     {"id": "p003-c03", "type": "image_occlusion", "warnings": ["x"], "header": "Name it", "label": "Aorta"},
 ]
 
+DEDUPE_BRIEF = [
+    {"id": "p003-c02", "type": "basic", "front": "Wo liegt die Aorta?", "back": "Hinter dem Sternum"},
+    {"id": "p007-c05", "type": "image_occlusion", "header": "Benenne die markierte Struktur", "label": "Aorta"},
+]
+DEDUPE_PAIRS = [["p003-c02", "p007-c05"], ["p010-c01", "p010-c03"]]
+
 fixture = {
     "systems": [
         {"density": d, "language": lang, "latin": latin, "atlas": atlas, "text": prompts["system_prompt"](DENSITY[d], lang, latin, atlas)}
@@ -126,6 +132,8 @@ fixture = {
         }
         for name, layout in LAYOUTS.items()
     ],
+    "dedupeSystem": prompts["DEDUPE_SYSTEM"],
+    "dedupePrompt": {"cards": DEDUPE_BRIEF, "pairs": DEDUPE_PAIRS, "text": prompts["dedupe_prompt"](DEDUPE_BRIEF, [tuple(p) for p in DEDUPE_PAIRS])},
     "repairSuffix": prompts["REPAIR_SUFFIX"].format(error="JSON-Fehler: x"),
 }
 OUT.write_text(json.dumps(fixture, ensure_ascii=False, indent=1), encoding="utf-8")

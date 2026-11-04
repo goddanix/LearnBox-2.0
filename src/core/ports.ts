@@ -31,7 +31,7 @@ import type {
 	TurnUsage,
 	NotesSource,
 } from "./contracts.ts";
-import type { CardPageResult } from "./contracts/create-cards.ts";
+import type { CardPageResult, DedupeCache } from "./contracts/create-cards.ts";
 import type { PageLayout } from "./contracts/page-layout.ts";
 import type { UserSettings } from "./settings.ts";
 
@@ -288,4 +288,7 @@ export interface CreateStore {
 	writeLayout(id: string, page: number, layout: PageLayout): void;
 	/** Cards jobs: the folder of the rendered card pictures, created on demand. */
 	mediaDir(id: string): string;
+	/** Cards jobs: how far Claude's content check of duplicates has come (empty when never run). */
+	readDedupeCache(id: string): DedupeCache;
+	writeDedupeCache(id: string, cache: DedupeCache): void;
 }

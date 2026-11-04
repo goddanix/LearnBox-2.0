@@ -200,6 +200,32 @@ export interface DuplicateGroup {
 	keep: string;
 	/** The keeper first. */
 	cards: CardDraft[];
+	/** Found by Claude's content check, not by the text/position comparison. */
+	semantic?: true;
+}
+
+/** The duplicate review of a job: the groups to look at and how many cards were removed on their own already. */
+export interface DuplicateReview {
+	groups: DuplicateGroup[];
+	autoRemoved: number;
+}
+
+/** What Claude's content check of duplicates has done so far in a job: every card is asked about only once. */
+export interface DedupeCache {
+	/** Ids of the cards already given to Claude. */
+	checked: string[];
+	/** Groups of card ids Claude called the same thing (never removed automatically). */
+	groups: { cards: string[] }[];
+}
+
+/** One step of the content check (one call to Claude); the screen repeats it until `done`. */
+export interface SemanticStep {
+	checkedNow: number;
+	/** Candidate pairs not yet checked. */
+	remaining: number;
+	groups: DuplicateGroup[];
+	done: boolean;
+	error: string | null;
 }
 
 /** One canonical spelling for the whole document, with the variants it replaces (the term glossary). */
