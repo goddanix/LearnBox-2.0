@@ -11,7 +11,7 @@
  */
 
 import type { Box } from "./page-layout.ts";
-import type { Adoption, CreateLanguage } from "./create.ts";
+import type { Adoption, CreateJobSummary, CreateLanguage, CreatePageStatus } from "./create.ts";
 
 /** How many cards a page should yield: "concept" asks for understanding questions instead of single facts. */
 export const CARD_DENSITIES = ["brief", "normal", "thorough", "concept"] as const;
@@ -164,7 +164,7 @@ export interface OcclusionCard extends CardBase {
 	answerFile: string | null;
 	/** Perceptual hash of the figure (finds the same figure on another page). */
 	figHash?: string;
-	/** The mask planner's version of the last rendering. */
+	/** The mask planner's version of the last rendering (core/card-media.ts MASK_VERSION). */
 	maskV?: number;
 }
 
@@ -206,4 +206,25 @@ export interface DuplicateGroup {
 export interface GlossaryTerm {
 	canonical: string;
 	variants: string[];
+}
+
+/** One page for the card list. */
+export interface CardJobPageView {
+	page: number;
+	status: CreatePageStatus;
+	error?: string;
+	/** The model's short title of the page. */
+	topic: string;
+	/** The page held nothing to learn (title page, table of contents …) — with the model's reason. */
+	skipped: boolean;
+	skipReason: string;
+	cards: CardDraft[];
+	/** Cards the model offered that were refused (with reasons in the page file). */
+	dropped: number;
+}
+
+export interface CardsJobDetail {
+	job: CreateJobSummary;
+	settings: CardSettings;
+	pages: CardJobPageView[];
 }

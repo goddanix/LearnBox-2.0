@@ -6,7 +6,8 @@ export const dynamic = "force-dynamic";
 /**
  * POST /api/create/jobs/:id/start { pages?, more? } — resume the unfinished pages, retry just
  * `pages`, or with `more` ask for further, different questions on every page; returns { started }
- * (false when a run is already going or there is nothing left to do).
+ * (false when a run is already going or there is nothing left to do). A cards job takes `pages`
+ * only: naming a page runs it again (cards you made or adopted there stay).
  */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
 	const { id } = await params;

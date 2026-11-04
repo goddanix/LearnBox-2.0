@@ -140,9 +140,9 @@ function compare(a: Profile, b: Profile, th: number): Verdict {
 
 type Rank = [number, number, number, number, string];
 
-/** Smallest = keep: the learner's own / edited cards first, then the more important tier, fewer warnings, the earlier page. */
+/** Smallest = keep: the learner's own / edited / adopted cards first, then the more important tier, fewer warnings, the earlier page. */
 export function keepRank(c: CardDraft): Rank {
-	const protectedCard = c.manual || c.edited || c.restored;
+	const protectedCard = c.manual || c.edited || c.restored || Boolean(c.adopted);
 	return [protectedCard ? 0 : 1, c.tier, c.warnings.length, c.page, c.id];
 }
 
@@ -253,13 +253,13 @@ export function findGroups(pages: readonly { cards: readonly CardDraft[] }[], th
 
 /**
  * Throws (almost) identical cards away (deleted + a note, restorable). The learner's own, edited and
- * restored cards are never removed automatically. Returns how many were removed.
+ * restored cards, and cards already adopted into a course, are never removed automatically. Returns how many were removed.
  */
 export function autoMark(pages: readonly { cards: readonly CardDraft[] }[], threshold = AUTO_THRESHOLD): number {
 	let n = 0;
 	for (const g of findGroups(pages, threshold)) {
 		for (const c of g.cards.slice(1)) {
-			if (c.manual || c.edited || c.restored) continue;
+			if (c.manual || c.edited || c.restored || c.adopted) continue;
 			c.deleted = true;
 			c.note = `${DUPLICATE_NOTE}${g.keep}`;
 			n++;

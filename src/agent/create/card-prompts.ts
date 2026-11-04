@@ -451,20 +451,6 @@ export function cardPagePrompt(p: CardPagePrompt): string {
 
 // ─── focus on topics (focus.py) ──────────────────────────────────────────────
 
-const MAX_TOPICS = 40;
-const MAX_TOPIC_CHARS = 80;
-
-/** Text (commas, semicolons or lines as separators) or a list → clean, unique topics. */
-export function cleanTopics(value: unknown): string[] {
-	const parts = typeof value === "string" ? value.split(/[,;\n]/) : Array.isArray(value) ? value.map(String) : [];
-	const out: string[] = [];
-	for (const part of parts) {
-		const topic = part.split(/\s+/).filter(Boolean).join(" ").slice(0, MAX_TOPIC_CHARS).replace(/^[ .:\-–]+|[ .:\-–]+$/g, "");
-		if (topic && !out.some((t) => t.toLowerCase() === topic.toLowerCase())) out.push(topic);
-	}
-	return out.slice(0, MAX_TOPICS);
-}
-
 /** Addition to the system prompt; empty without a focus. Soft = emphasis, strict = only these topics. */
 export function focusHint(topics: readonly string[], strict: boolean): string {
 	if (topics.length === 0) return "";

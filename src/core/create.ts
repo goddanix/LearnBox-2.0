@@ -107,7 +107,7 @@ export function clampPageRange(pageFrom: number, pageTo: number, nPages: number)
 	return { from, to: Math.max(from, to) };
 }
 
-const int = (v: unknown, fallback: number, min: number, max: number): number => {
+export const int = (v: unknown, fallback: number, min: number, max: number): number => {
 	const n = typeof v === "number" ? v : typeof v === "string" && v.trim() !== "" ? Number(v) : NaN;
 	return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.trunc(n))) : fallback;
 };

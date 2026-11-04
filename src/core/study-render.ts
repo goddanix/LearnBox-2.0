@@ -235,6 +235,7 @@ body { font-family:-apple-system,"Helvetica Neue",Arial,sans-serif; font-size:20
 .card { box-sizing:border-box; max-width:760px; margin:0 auto; padding:24px 16px; min-height:100%; display:flex; flex-direction:column; justify-content:center; }
 .cloze { font-weight:bold; color:var(--accent); }
 .cloze-hidden { color:var(--muted); }
+.latin-en { color:var(--muted); font-style:italic; }
 .extra { margin-top:12px; padding:8px 10px; border-left:3px solid var(--extra); font-size:17px; opacity:.92; }
 .source { margin-top:14px; font-size:12px; color:var(--muted); }
 .a { font-weight:600; }

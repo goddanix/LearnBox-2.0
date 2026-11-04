@@ -21,18 +21,19 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ClaudeAskError, askClaude, type AskClaude } from "../agent/claude-ask.ts";
-import { mcqPagePrompt, mcqSystemPrompt, repairSuffix } from "../agent/create/mcq-prompts.ts";
-import { getHeadless } from "../agent/subagents/headless.ts";
-import { pdfExtract, pdfPageCount, pdfPageLines, type PdfTextLine } from "../agent/subagents/pdf-ops.ts";
+import { ClaudeAskError } from "../agent/claude-ask.ts";
+import { mcqPagePrompt, mcqSystemPrompt } from "../agent/create/mcq-prompts.ts";
+import { pdfPageCount } from "../agent/subagents/pdf-ops.ts";
 import {
 	CREATE_SCHEMA,
 	CreateInputError,
 	type CreateJob,
 	type CreateJobDetail,
+	type CreateJobKind,
 	type CreateJobPageView,
 	type CreateJobSummary,
-	type LectureSource,
+	type CreatePage,
+	type McqJob,
 	type McqPageResult,
 	type McqQuestion,
 	type StudyCard,
@@ -44,109 +45,38 @@ import {
 	mcqCardFields,
 	pageNumbers,
 	pageOfQuestionId,
-	parseModelJson,
 	questionId,
 	validateMcqQuestion,
 } from "../core/create.ts";
-import type { CreateStore, LibraryStore, StudyStore } from "../core/ports.ts";
-import { addLecture } from "./library.ts";
-import { stores } from "./stores.ts";
+import { startCardsJob, withCardSeams } from "./create-cards.ts";
+import { type AdoptResult, type CreateDeps, RunBlocked, askJson, defaultCreateDeps, errorText, pad, requireJob, reconciled, running, summarize } from "./create-shared.ts";
 
-export interface CreateDeps {
-	create: CreateStore;
-	library: LibraryStore;
-	study: StudyStore;
-	ask: AskClaude;
-	/** One page as PNG bytes. */
-	renderPage: (pdfPath: string, page: number) => Promise<Uint8Array>;
-	pageLines: (pdfPath: string, page: number) => Promise<PdfTextLine[]>;
-	/** The whole text of a PDF, cut to `maxChars`. */
-	documentText: (pdfPath: string, maxChars: number) => Promise<string>;
-	/** Put a PDF into the library (the same PDF twice is stored once). */
-	addPdf: (fileName: string, data: Uint8Array) => Promise<LectureSource>;
-	now: () => Date;
-	/** Pause before the second try of a failed call. */
-	retryDelayMs: number;
-}
-
-export const defaultCreateDeps = (): CreateDeps => ({
-	create: stores.createStore,
-	library: stores.libraryStore,
-	study: stores.studyStore,
-	ask: askClaude,
-	renderPage: async (pdfPath, page) => {
-		const [rendered] = await getHeadless().renderPdfPages(pdfPath, [page], { dpi: 150 });
-		if (!rendered) throw new Error(`page ${page} could not be rendered`);
-		return rendered.png;
-	},
-	pageLines: pdfPageLines,
-	documentText: async (pdfPath, maxChars) => {
-		const text = (await pdfExtract(pdfPath, "all")).trim();
-		return text.length > maxChars ? `${text.slice(0, maxChars)}\n… (cut)` : text;
-	},
-	addPdf: async (fileName, data) => (await addLecture(fileName, data)).source,
-	now: () => new Date(),
-	retryDelayMs: 3000,
-});
+export { type AdoptResult, type CreateDeps, defaultCreateDeps } from "./create-shared.ts";
 
 /** Upper bound for the second PDF's text: it rides in EVERY page prompt, so it is kept short. */
 const LECTURE_MAX_CHARS = 40_000;
 export const LECTURE_TEXT_FILE = "lecture.txt";
 
-/** Jobs with a live run, by id (the abort handle). Kept on globalThis: Next may load this module once per
- *  route bundle, and the start route and the list route must see the same runs. */
-const runs = globalThis as typeof globalThis & { __lbCreateRuns?: Map<string, AbortController> };
-const running = (runs.__lbCreateRuns ??= new Map<string, AbortController>());
-
-const pad = (page: number) => String(page).padStart(3, "0");
-const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
-
 // ─── reading jobs ────────────────────────────────────────────────────────────
-
-/** A job record as stored, but with a run that no longer exists reported honestly:
- *  "interrupted", its unfinished pages back to "pending". */
-function reconciled(job: CreateJob, deps: CreateDeps): CreateJob {
-	if (job.state !== "running" || running.has(job.id)) return job;
-	return (
-		deps.create.update(job.id, (j) => {
-			j.state = "interrupted";
-			for (const page of Object.values(j.pages)) if (page.status === "running") page.status = "pending";
-		}) ?? job
-	);
-}
-
-function summarize(job: CreateJob): CreateJobSummary {
-	const pages = Object.values(job.pages);
-	return {
-		id: job.id,
-		kind: job.kind,
-		name: job.name,
-		lectureId: job.lectureId,
-		state: job.state,
-		running: running.has(job.id),
-		...(job.blocked ? { blocked: job.blocked } : {}),
-		...(job.fatal ? { fatal: job.fatal } : {}),
-		createdAt: job.createdAt,
-		nPages: job.nPages,
-		total: pages.length,
-		counts: countPages(job.pages),
-		drafts: pages.reduce((sum, p) => sum + p.count, 0),
-		adopted: pages.reduce((sum, p) => sum + p.adopted, 0),
-	};
-}
 
 export function listCreateJobs(deps: CreateDeps = defaultCreateDeps()): CreateJobSummary[] {
 	return deps.create.list().map((job) => summarize(reconciled(job, deps)));
 }
 
-function requireJob(id: string, deps: CreateDeps): CreateJob {
-	const job = /^[A-Za-z0-9_-]+$/.test(id) ? deps.create.get(id) : null;
-	if (!job) throw new CreateInputError("Unknown job", 404);
-	return reconciled(job, deps);
+/** The job as an MC-test job; a job of another kind is refused with a clean 409. */
+function requireMcq(id: string, deps: CreateDeps): McqJob {
+	const job = requireJob(id, deps);
+	if (job.kind !== "mcq") throw new CreateInputError("This is not a multiple-choice job", 409);
+	return job;
+}
+
+/** What kind of job `id` is (the job route picks the view by it). */
+export function createJobKind(id: string, deps: CreateDeps = defaultCreateDeps()): CreateJobKind {
+	return requireJob(id, deps).kind;
 }
 
 export function getCreateJob(id: string, deps: CreateDeps = defaultCreateDeps()): CreateJobDetail {
-	const job = requireJob(id, deps);
+	const job = requireMcq(id, deps);
 	const pages: CreateJobPageView[] = pageNumbers(job).map((page) => {
 		const meta = job.pages[String(page)]!;
 		return {
@@ -191,7 +121,7 @@ export async function createMcqJob(input: CreateMcqJobInput, deps: CreateDeps = 
 	settings.pageTo = range.to;
 
 	const id = `crt_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
-	const job: CreateJob = {
+	const job: McqJob = {
 		v: CREATE_SCHEMA,
 		id,
 		kind: "mcq",
@@ -219,39 +149,6 @@ export async function createMcqJob(input: CreateMcqJobInput, deps: CreateDeps = 
 
 // ─── running a job ───────────────────────────────────────────────────────────
 
-/** The whole run must stop: the sign-in is gone, the plan's limit is reached, or the CLI is missing. */
-class RunBlocked extends Error {}
-
-const sleep = (ms: number) => (ms > 0 ? new Promise<void>((resolve) => setTimeout(resolve, ms)) : Promise.resolve());
-
-/** Ask for a JSON object; one repair retry for an unreadable answer, one plain retry for a failed call. */
-async function askJson(
-	deps: CreateDeps,
-	request: { prompt: string; system: string; cwd: string; model: string; signal: AbortSignal },
-): Promise<Record<string, unknown>> {
-	const retries = 1;
-	let last = "unknown error";
-	for (let attempt = 0; attempt <= retries; attempt++) {
-		const prompt = attempt === 0 ? request.prompt : request.prompt + repairSuffix(last);
-		let text: string;
-		try {
-			text = (await deps.ask({ ...request, prompt })).text;
-		} catch (err) {
-			if (!(err instanceof ClaudeAskError) || err.kind === "aborted") throw err;
-			if (err.kind !== "other") throw new RunBlocked(err.message);
-			last = err.message;
-			if (attempt < retries) await sleep(deps.retryDelayMs);
-			continue;
-		}
-		try {
-			return parseModelJson(text);
-		} catch (err) {
-			last = `JSON error: ${errorText(err)}`;
-		}
-	}
-	throw new Error(last);
-}
-
 function pageMeta(result: McqPageResult) {
 	const live = result.questions.filter((q) => !q.deleted);
 	return { count: live.length, adopted: live.filter((q) => q.adopted).length };
@@ -271,8 +168,8 @@ const nextQuestionIndex = (questions: readonly McqQuestion[]): number =>
 
 type RunMode = "resume" | "more";
 
-async function processMcqPage(job: CreateJob, n: number, mode: RunMode, signal: AbortSignal, deps: CreateDeps): Promise<void> {
-	const setPage = (change: (page: CreateJob["pages"][string]) => void) =>
+async function processMcqPage(job: McqJob, n: number, mode: RunMode, signal: AbortSignal, deps: CreateDeps): Promise<void> {
+	const setPage = (change: (page: CreatePage) => void) =>
 		deps.create.update(job.id, (j) => {
 			const page = j.pages[String(n)];
 			if (page) change(page);
@@ -373,6 +270,7 @@ async function runJob(jobId: string, pages: number[], mode: RunMode, controller:
 				const current = deps.create.get(jobId);
 				if (!current) return; // deleted meanwhile
 				try {
+					if (current.kind !== "mcq") return;
 					await processMcqPage(current, n, mode, controller.signal, deps);
 				} catch (err) {
 					if (!(err instanceof RunBlocked)) throw err;
@@ -406,14 +304,16 @@ export interface StartCreateOptions {
 /**
  * Start (or resume) a job's run and return at once. `settled` resolves when the
  * run has ended (a test seam; the route ignores it). A run already in flight
- * is left alone (`started: false`).
+ * is left alone (`started: false`). A cards job is run by create-cards.ts
+ * (`more` does not apply there: a page that is run again is named in `pages`).
  */
 export function startCreateJob(
 	id: string,
 	opts: StartCreateOptions = {},
 	deps: CreateDeps = defaultCreateDeps(),
 ): { started: boolean; settled: Promise<void> } {
-	const job = requireJob(id, deps);
+	if (requireJob(id, deps).kind === "cards") return startCardsJob(id, { pages: opts.pages }, withCardSeams(deps));
+	const job = requireMcq(id, deps);
 	if (running.has(id)) return { started: false, settled: Promise.resolve() };
 
 	const all = pageNumbers(job);
@@ -452,7 +352,7 @@ export function deleteCreateJob(id: string, deps: CreateDeps = defaultCreateDeps
 
 /** Throw a draft away (soft: it can be restored until the job is deleted). An adopted draft is a card now. */
 export function setQuestionDeleted(id: string, questionId: string, deleted: boolean, deps: CreateDeps = defaultCreateDeps()): McqQuestion {
-	requireJob(id, deps);
+	requireMcq(id, deps);
 	const page = pageOfQuestionId(questionId);
 	const result = page === null ? null : deps.create.readPage(id, page);
 	const question = result?.questions.find((q) => q.id === questionId);
@@ -461,13 +361,6 @@ export function setQuestionDeleted(id: string, questionId: string, deleted: bool
 	question.deleted = deleted;
 	savePage(id, result, deps);
 	return question;
-}
-
-export interface AdoptResult {
-	/** Drafts that became cards now. */
-	adopted: number;
-	/** Drafts left out: deleted, or already adopted earlier. */
-	skipped: number;
 }
 
 /**
@@ -480,7 +373,7 @@ export function adoptQuestions(
 	input: { courseId: string; questionIds?: string[] },
 	deps: CreateDeps = defaultCreateDeps(),
 ): AdoptResult {
-	const job = requireJob(id, deps);
+	const job = requireMcq(id, deps);
 	const course = deps.study.readCourses().find((c) => c.id === input.courseId);
 	if (!course) throw new CreateInputError("Unknown course", 404);
 	const wanted = input.questionIds ? new Set(input.questionIds) : null;

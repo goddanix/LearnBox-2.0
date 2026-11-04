@@ -139,13 +139,17 @@ export function studyCourses(now: Date = new Date(), deps: StudyDeps = defaultDe
 	}));
 }
 
-/** Cards of the same Anki note (other than `card` itself); a card without a shared note has none. */
+/** Cards of the same note (other than `card` itself): an Anki note, or the cards of one PDF draft
+ *  (both directions, the gaps of one figure); a card without a shared note has none. */
 function siblingsOf(card: StudyCard, cards: readonly StudyCard[]): StudyCard[] {
-	if (card.origin.kind !== "anki-import") return [];
-	const noteId = card.origin.noteId;
-	return cards.filter(
-		(c) => c.id !== card.id && c.origin.kind === "anki-import" && c.origin.noteId === noteId,
-	);
+	const origin = card.origin;
+	if (origin.kind === "anki-import") {
+		return cards.filter((c) => c.id !== card.id && c.origin.kind === "anki-import" && c.origin.noteId === origin.noteId);
+	}
+	if (origin.kind === "pdf" && origin.draftId) {
+		return cards.filter((c) => c.id !== card.id && c.origin.kind === "pdf" && c.origin.jobId === origin.jobId && c.origin.draftId === origin.draftId);
+	}
+	return [];
 }
 
 function view(

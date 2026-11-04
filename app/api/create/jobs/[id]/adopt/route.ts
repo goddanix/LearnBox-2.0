@@ -1,11 +1,12 @@
 import { CreateInputError } from "@/src/core";
-import { adoptQuestions } from "@/src/server";
+import { adoptCards, adoptQuestions, createJobKind } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 
 /**
- * POST /api/create/jobs/:id/adopt { courseId, questionIds? } — turn the job's drafts (all that
- * are neither deleted nor adopted, or just `questionIds`) into study cards of the course.
+ * POST /api/create/jobs/:id/adopt { courseId, questionIds? | cardIds? } — turn the job's drafts (all
+ * that are neither deleted nor adopted, or just `questionIds` of an MC test / `cardIds` of a cards
+ * job) into study cards of the course.
  */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
 	const { id } = await params;
@@ -15,6 +16,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 	}
 	const questionIds = Array.isArray(body.questionIds) ? body.questionIds.filter((q): q is string => typeof q === "string") : undefined;
 	try {
+		if (createJobKind(id) === "cards") {
+			const cardIds = Array.isArray(body.cardIds) ? body.cardIds.filter((c): c is string => typeof c === "string") : undefined;
+			return Response.json(adoptCards(id, { courseId: body.courseId, cardIds }));
+		}
 		return Response.json(adoptQuestions(id, { courseId: body.courseId, questionIds }));
 	} catch (err) {
 		if (err instanceof CreateInputError) return Response.json({ error: err.message }, { status: err.status });

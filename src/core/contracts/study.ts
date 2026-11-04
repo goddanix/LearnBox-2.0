@@ -32,9 +32,11 @@ export interface StudyCourse {
 	createdAt: string;
 }
 
-/** Where a card came from — the cross-feature links (PDF, graph, Anki). */
+/** Where a card came from — the cross-feature links (PDF, graph, Anki). A PDF card made from a
+ *  draft carries the draft's id: the cards of one draft (both directions, the gaps of one figure)
+ *  are siblings, like the cards of an Anki note. */
 export type StudyCardOrigin =
-	| { kind: "pdf"; jobId: string; page?: number }
+	| { kind: "pdf"; jobId: string; page?: number; draftId?: string }
 	| { kind: "graph"; nodeId: string }
 	| { kind: "anki-import"; noteId: number }
 	| { kind: "manual" };

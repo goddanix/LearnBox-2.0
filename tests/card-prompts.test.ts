@@ -9,7 +9,6 @@ import { describe, it } from "node:test";
 import {
 	cardPagePrompt,
 	cardSystemPrompt,
-	cleanTopics,
 	CRITIC_SYSTEM,
 	criticPrompt,
 	fixed3,
@@ -21,6 +20,7 @@ import {
 	vocabSystemPrompt,
 } from "../src/agent/create/card-prompts.ts";
 import { repairSuffix } from "../src/agent/create/mcq-prompts.ts";
+import { cleanTopics } from "../src/core/card-util.ts";
 import { VOCAB_MAX_PER_PAGE } from "../src/core/contracts/create-cards.ts";
 import type { PageLayout } from "../src/core/contracts/page-layout.ts";
 

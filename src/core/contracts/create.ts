@@ -8,14 +8,16 @@
  * ledgers so a half-finished or rejected run leaves the learner's cards
  * untouched.
  *
- * Ported from MedAnki's MC-test generator (medanki/mcq.py); the job kinds a
- * later slice adds ("cards") share this record.
+ * Ported from MedAnki's MC-test generator (medanki/mcq.py); the "cards" kind
+ * (cards from a PDF, core/contracts/create-cards.ts) shares this record.
  */
+
+import type { CardSettings, GlossaryTerm } from "./create-cards.ts";
 
 /** Schema stamp on every job record (a newer stamp is refused on read). */
 export const CREATE_SCHEMA = 1;
 
-export type CreateJobKind = "mcq";
+export type CreateJobKind = "mcq" | "cards";
 
 export type CreateJobState = "queued" | "running" | "done" | "stopped" | "interrupted";
 
@@ -34,6 +36,9 @@ export interface CreatePage {
 	count: number;
 	/** Of those, the ones already adopted into a course. */
 	adopted: number;
+	/** Cards jobs: the model's short title of the page, and whether it left the page out (no learnable content). */
+	topic?: string;
+	skipped?: boolean;
 }
 
 /** What the learner can set for an MC-test job. */
@@ -59,20 +64,18 @@ export const DEFAULT_MCQ_SETTINGS: McqSettings = {
 	concurrency: 2,
 };
 
-export interface CreateJob {
+interface CreateJobBase {
 	v: typeof CREATE_SCHEMA;
 	id: string;
-	kind: CreateJobKind;
 	/** Display name, derived from the lecture until renamed. */
 	name: string;
-	/** The library PDF the questions are about (data/library). */
+	/** The library PDF the material is made from (data/library). */
 	lectureId: string;
 	/** An optional second library PDF — the factual source (e.g. the lecture
 	 *  slides) when the main PDF is a question sheet; its text rides in every page prompt. */
 	sourceLectureId?: string;
 	/** Pages of the PDF at creation (the range is clamped to it). */
 	nPages: number;
-	settings: McqSettings;
 	state: CreateJobState;
 	/** The Claude CLI needs a sign-in (or the plan's limit is hit): the run stopped on its own. */
 	blocked?: string;
@@ -82,6 +85,24 @@ export interface CreateJob {
 	/** Pages in the job's range, by page number as a string. */
 	pages: Record<string, CreatePage>;
 }
+
+export interface McqJob extends CreateJobBase {
+	kind: "mcq";
+	settings: McqSettings;
+}
+
+export interface CardsJob extends CreateJobBase {
+	kind: "cards";
+	settings: CardSettings;
+	/** Latin anatomical terms on/off, decided once before the first page. */
+	latin?: boolean;
+	/** The term glossary of the document, built once (absent = not built yet). */
+	glossary?: GlossaryTerm[];
+	/** The title of every page of the range, found once; the page prompt names the neighbours as context. */
+	headings?: Record<string, string>;
+}
+
+export type CreateJob = McqJob | CardsJob;
 
 export const MCQ_LETTERS = ["A", "B", "C", "D"] as const;
 export type McqLetter = (typeof MCQ_LETTERS)[number];

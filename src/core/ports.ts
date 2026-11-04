@@ -31,6 +31,8 @@ import type {
 	TurnUsage,
 	NotesSource,
 } from "./contracts.ts";
+import type { CardPageResult } from "./contracts/create-cards.ts";
+import type { PageLayout } from "./contracts/page-layout.ts";
 import type { UserSettings } from "./settings.ts";
 
 // ─── ChatStore — the session record's home (data/chats) ─────────────────────
@@ -278,4 +280,12 @@ export interface CreateStore {
 	readPage(id: string, page: number): McqPageResult | null;
 	/** Replace one page's drafts. */
 	writePage(id: string, result: McqPageResult): void;
+	/** Cards jobs: one page's card drafts, and replacing them. */
+	readCardPage(id: string, page: number): CardPageResult | null;
+	writeCardPage(id: string, result: CardPageResult): void;
+	/** Cards jobs: the page layout the cards were made from (lines, figures, legends), cached so a rerun and the focus screen need no second reading. */
+	readLayout(id: string, page: number): PageLayout | null;
+	writeLayout(id: string, page: number, layout: PageLayout): void;
+	/** Cards jobs: the folder of the rendered card pictures, created on demand. */
+	mediaDir(id: string): string;
 }

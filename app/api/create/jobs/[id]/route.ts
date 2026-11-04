@@ -1,13 +1,13 @@
 import { CreateInputError } from "@/src/core";
-import { deleteCreateJob, getCreateJob } from "@/src/server";
+import { createJobKind, deleteCreateJob, getCardsJob, getCreateJob } from "@/src/server";
 
 export const dynamic = "force-dynamic";
 
-/** GET /api/create/jobs/:id — the job with its pages and draft questions. */
+/** GET /api/create/jobs/:id — the job with its pages and drafts (questions or cards, by the job's kind). */
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
 	const { id } = await params;
 	try {
-		return Response.json(getCreateJob(id));
+		return Response.json(createJobKind(id) === "cards" ? getCardsJob(id) : getCreateJob(id));
 	} catch (err) {
 		if (err instanceof CreateInputError) return Response.json({ error: err.message }, { status: err.status });
 		throw err;

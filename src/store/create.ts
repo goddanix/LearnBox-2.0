@@ -2,7 +2,9 @@
  * CreateStore — the fs adapter for Create jobs: one folder per job in
  * data/create/<id>/ holding
  *   job.json          the CreateJob record (progress book)
- *   results/p003.json one page's drafts (McqPageResult)
+ *   results/p003.json one page's drafts (McqPageResult, or CardPageResult for cards jobs)
+ *   layouts/p003.json cards jobs: the page layout the cards were made from
+ *   media/            cards jobs: the rendered card pictures
  *   work/             scratch the page prompts read — rendered page images,
  *                     the second PDF's text; the Claude CLI runs inside it
  * Implements core/ports.ts CreateStore. Idioms follow the library store: sync
@@ -15,6 +17,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { PATHS } from "../../config.ts";
 import { CREATE_SCHEMA, type CreateJob, type McqPageResult } from "../core/contracts/create.ts";
+import type { CardPageResult } from "../core/contracts/create-cards.ts";
+import type { PageLayout } from "../core/contracts/page-layout.ts";
 import type { CreateStore } from "../core/ports.ts";
 
 const ID = /^[A-Za-z0-9_-]+$/;
@@ -43,6 +47,7 @@ export function createCreateStore(root: string): CreateStore {
 	};
 	const jobFile = (id: string) => path.join(jobDir(id), "job.json");
 	const resultFile = (id: string, page: number) => path.join(jobDir(id), "results", `p${String(page).padStart(3, "0")}.json`);
+	const layoutFile = (id: string, page: number) => path.join(jobDir(id), "layouts", `p${String(page).padStart(3, "0")}.json`);
 
 	function get(id: string): CreateJob | null {
 		const record = readJson(jobFile(id));
@@ -96,6 +101,27 @@ export function createCreateStore(root: string): CreateStore {
 		},
 		writePage(id, result) {
 			writeJson(resultFile(id, result.page), result);
+		},
+		readCardPage(id, page) {
+			const record = readJson(resultFile(id, page));
+			if (!isRecord(record) || record.page !== page || !Array.isArray(record.cards)) return null;
+			return record as unknown as CardPageResult;
+		},
+		writeCardPage(id, result) {
+			writeJson(resultFile(id, result.page), result);
+		},
+		readLayout(id, page) {
+			const record = readJson(layoutFile(id, page));
+			if (!isRecord(record) || !Array.isArray(record.lines) || !Array.isArray(record.figures)) return null;
+			return record as unknown as PageLayout;
+		},
+		writeLayout(id, page, layout) {
+			writeJson(layoutFile(id, page), layout);
+		},
+		mediaDir(id) {
+			const dir = path.join(jobDir(id), "media");
+			fs.mkdirSync(dir, { recursive: true });
+			return dir;
 		},
 	};
 }

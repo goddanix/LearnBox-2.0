@@ -128,14 +128,14 @@ const plain = (s: string) => norm(s);
  * context), the code builds the occlusion group itself — one entry per legend line, exact boxes. Cards that
  * only ask the same legend names about the same picture are thrown away (restorable).
  */
-function applyLegendFallback(cards: CardDraft[], layout: PageLayout, page: number, settings: NormalizeSettings): void {
+function applyLegendFallback(cards: CardDraft[], layout: PageLayout, page: number, settings: NormalizeSettings, firstIndex: number): void {
 	const legends = layout.legends.filter((lg) => lg.confident && lg.figure);
 	if (legends.length === 0) return;
 	const figs = new Map(layout.figures.map((f) => [f.id, f.bbox]));
 	const lines = indexLines(layout);
 	const byFigure = new Map<string, typeof legends>();
 	for (const lg of legends) byFigure.set(lg.figure, [...(byFigure.get(lg.figure) ?? []), lg]);
-	let idx = cards.reduce((max, c) => Math.max(max, Number(/-c(\d+)$/.exec(c.id)?.[1] ?? 0)), 0);
+	let idx = cards.reduce((max, c) => Math.max(max, Number(/-c(\d+)$/.exec(c.id)?.[1] ?? 0)), firstIndex - 1);
 	const made = new Set<CardDraft>();
 
 	for (const [figId, lgs] of byFigure) {
@@ -183,9 +183,10 @@ function applyLegendFallback(cards: CardDraft[], layout: PageLayout, page: numbe
 
 /**
  * The model's answer for page `page` → the page result. `raw` is the parsed JSON object; nothing in it is
- * trusted. A skipped page returns no cards.
+ * trusted. A skipped page returns no cards. New cards are numbered from `firstIndex` on (cards kept from an
+ * earlier run of the page keep their ids).
  */
-export function normalizePage(raw: Record<string, unknown>, layout: PageLayout, page: number, settings: NormalizeSettings): CardPageResult {
+export function normalizePage(raw: Record<string, unknown>, layout: PageLayout, page: number, settings: NormalizeSettings, firstIndex = 1): CardPageResult {
 	const result: CardPageResult = {
 		page,
 		pageType: String(raw.page_type ?? "").slice(0, 30),
@@ -203,7 +204,7 @@ export function normalizePage(raw: Record<string, unknown>, layout: PageLayout, 
 
 	const lines = indexLines(layout);
 	const drop = (reason: string, rawCard: unknown) => result.dropped.push({ reason, raw: rawCard } satisfies DroppedCard);
-	let idx = 0;
+	let idx = firstIndex - 1;
 	for (const entry of Array.isArray(raw.cards) ? raw.cards : []) {
 		if (!isRecord(entry)) continue;
 		const ctype = String(entry.type ?? "").trim();
@@ -258,10 +259,10 @@ export function normalizePage(raw: Record<string, unknown>, layout: PageLayout, 
 		});
 		result.cards = result.cards.filter((_, i) => keep.has(i));
 		result.cards.forEach((c, n) => {
-			c.id = cardId(page, n + 1);
+			c.id = cardId(page, firstIndex + n);
 		});
 	}
-	if (!settings.vocab) applyLegendFallback(result.cards, layout, page, settings); // vocabulary sheets never get occlusions from legends
+	if (!settings.vocab) applyLegendFallback(result.cards, layout, page, settings, firstIndex); // vocabulary sheets never get occlusions from legends
 	mergeOcclusionGroups(result.cards);
 	for (const c of result.cards) c.warnings.push(...qualityWarnings(c), ...evidenceWarnings(c, layout));
 	autoMark([{ cards: result.cards }]);
