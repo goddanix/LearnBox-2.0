@@ -101,7 +101,7 @@ export function CreateView() {
 			<header className="flex items-center gap-2 px-3 py-2">
 				<SidebarToggle />
 			</header>
-			<div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 overflow-y-auto px-4 pb-10">
+			<div className={`mx-auto flex w-full ${openJob?.kind === "cards" ? "max-w-6xl" : "max-w-2xl"} flex-1 flex-col gap-4 overflow-y-auto px-4 pb-10`}>
 				<div className="flex items-center gap-2 pt-4 text-muted-foreground">
 					<SparklesIcon className="size-4" />
 					<h1 className="text-xs uppercase tracking-widest">Create — turn a PDF into study material</h1>

@@ -4,8 +4,11 @@ import React from "react";
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { DraftCard } from "../components/create/cards-job-detail.tsx";
+import { DraftCard } from "../components/create/draft-card.tsx";
+import { AddCardForm, CardEditor } from "../components/create/card-editor.tsx";
+import { DuplicatesPanel } from "../components/create/duplicates-panel.tsx";
 import { LegacyImport } from "../components/create/legacy-import.tsx";
+import { PagePicture } from "../components/create/page-picture.tsx";
 import { NewCardsForm } from "../components/create/new-cards-form.tsx";
 import { NewJobForm } from "../components/create/new-job-form.tsx";
 import type { LectureSource } from "../src/core/contracts.ts";
@@ -135,6 +138,86 @@ describe("DraftCard", () => {
 		const done = draft(adopted);
 		assert.match(done, /In your cards/);
 		assert.doesNotMatch(done, /aria-label="Throw away"/);
+	});
+});
+
+describe("DraftCard on the focus screen", () => {
+	it("shows the number of the card, marks the active one and holds the tools under the text", () => {
+		const c: FrontBackCard = { ...base, id: "p003-c01", type: "basic", front: "Q", back: "A", edited: true };
+		const html = renderToStaticMarkup(
+			<DraftCard c={c} mediaUrl={media} selected={false} onSelect={noop} onToggleDeleted={noop} number={4} active>
+				<button>Move mask</button>
+			</DraftCard>,
+		);
+		assert.match(html, /bg-sky-500\/80[^>]*>4<\/span>/);
+		assert.match(html, /border-sky-400\/70/);
+		assert.match(html, /<button>Move mask<\/button>/);
+		assert.match(html, /Edited/);
+		assert.match(html, /id="draft-p003-c01"/);
+		assert.doesNotMatch(html, /checked=""/);
+	});
+});
+
+describe("PagePicture", () => {
+	const markers = [
+		{ id: "p003-c01", box: [0.1, 0.2, 0.3, 0.4] as [number, number, number, number], label: "1", kind: "source" as const },
+		{ id: "p003-c02", box: [0.5, 0.5, 0.6, 0.55] as [number, number, number, number], label: "2", kind: "mask" as const, active: true },
+	];
+
+	it("lays the numbered boxes of the cards over the page in percent", () => {
+		const html = renderToStaticMarkup(<PagePicture src="/p.png" alt="Page 3" markers={markers} onMarker={noop} />);
+		assert.match(html, /src="\/p\.png"/);
+		assert.match(html, /left:10(\.0+)?%;top:20(\.0+)?%;width:20(\.0+)?%;height:20(\.0+)?%/);
+		assert.match(html, /aria-label="Card 2"/);
+		assert.match(html, /border-orange-400/);
+		assert.doesNotMatch(html, /page-tool-/, "no tool, no drawing layer");
+	});
+
+	it("offers eight handles and the body to drag when a box is edited, and a plain layer when one is drawn", () => {
+		const edit = renderToStaticMarkup(<PagePicture src="/p.png" alt="" markers={[]} onMarker={noop} tool={{ mode: "edit", box: [0.2, 0.2, 0.4, 0.4], onEdit: noop }} />);
+		assert.match(edit, /data-testid="page-tool-edit"/);
+		assert.equal((edit.match(/data-handle=/g) ?? []).length, 9);
+		assert.match(edit, /data-handle="move"/);
+		const draw = renderToStaticMarkup(<PagePicture src="/p.png" alt="" markers={[]} onMarker={noop} tool={{ mode: "draw", onDraw: noop }} />);
+		assert.match(draw, /data-testid="page-tool-draw"/);
+		assert.doesNotMatch(draw, /data-handle=/);
+	});
+});
+
+describe("CardEditor and AddCardForm", () => {
+	it("edits the sides of a question, the gap text of a cloze, or the header and answer of a picture card", () => {
+		const qa: FrontBackCard = { ...base, id: "p003-c01", type: "basic", front: "Which nerve?", back: "Median nerve", tags: ["arm", "nerve"] };
+		const html = renderToStaticMarkup(<CardEditor c={qa} onSave={async () => undefined} onCancel={noop} />);
+		assert.match(html, /Question[\s\S]*Which nerve\?/);
+		assert.match(html, /Median nerve/);
+		assert.match(html, /value="arm, nerve"/);
+		assert.match(html, /<option value="2" selected="">Good to know<\/option>/);
+
+		const gap: LegendClozeCard = { ...base, id: "p003-c02", type: "cloze", text: "1 {{c1::Aorta}}", legendCloze: true, markerBoxes: {}, markerNums: {} };
+		assert.match(renderToStaticMarkup(<CardEditor c={gap} onSave={async () => undefined} onCancel={noop} />), /Gap text — gaps as/);
+
+		const pic = { ...base, id: "p003-c03", type: "image_occlusion", header: "Name it", label: "Aorta", mode: "one", figureBbox: [0, 0, 1, 1], figureExact: false, maskExact: false, hint: "", boxes: [], markerBbox: null, allBoxes: [], needsCheck: false, questionFile: null, answerFile: null } as OcclusionCard;
+		const html3 = renderToStaticMarkup(<CardEditor c={pic} onSave={async () => undefined} onCancel={noop} />);
+		assert.match(html3, /Question above the picture/);
+		assert.match(html3, /Answer \(the covered word\)/);
+	});
+
+	it("starts as a question card and offers the picture card with its two region buttons", () => {
+		const html = renderToStaticMarkup(<AddCardForm onPick={noop} picking={false} onSubmit={async () => undefined} />);
+		assert.match(html, /<option value="basic" selected="">Question and answer<\/option>/);
+		assert.match(html, /<option value="image_occlusion">Cover a part of the picture<\/option>/);
+		assert.match(html, /data-testid="add-card-submit"/);
+		assert.doesNotMatch(html, /pick-area/, "the area buttons show with the picture type");
+	});
+});
+
+describe("DuplicatesPanel", () => {
+	it("starts with the strictness choice and Claude's check, before anything is loaded", () => {
+		const html = renderToStaticMarkup(<DuplicatesPanel jobId="crt_x" mediaUrl={media} onChanged={noop} />);
+		assert.match(html, /Duplicate cards/);
+		assert.match(html, /<option value="0\.8" selected="">Normal<\/option>/);
+		assert.match(html, /data-testid="dedupe-check"/);
+		assert.doesNotMatch(html, /dup-group/);
 	});
 });
 

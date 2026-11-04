@@ -1,11 +1,13 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeftIcon, CheckIcon, SquareIcon, Undo2Icon, XIcon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowLeftIcon, CheckIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { studyApi as api, postJson } from "@/components/study/api";
-import type { CardDraft, CardsJobDetail, StudyCourseSummary } from "@/src/core";
+import { CardsFocus } from "@/components/create/cards-focus";
+import { DuplicatesPanel } from "@/components/create/duplicates-panel";
+import type { CardsJobDetail, StudyCourseSummary } from "@/src/core";
 
 const LAST_COURSE_KEY = "lb-create-course";
 
@@ -17,62 +19,53 @@ function remembered(): string {
 	}
 }
 
-const TYPE_LABEL: Record<CardDraft["type"], string> = {
-	basic: "Question",
-	basic_reversed: "Both directions",
-	process: "Process",
-	cloze: "Gap text",
-	image_occlusion: "Picture",
-};
+const patch = (body: object): RequestInit => ({ ...postJson(body), method: "PATCH" });
 
-const TIER_LABEL = { 1: "Core", 2: "Good to know", 3: "Detail" } as const;
+/** The topics the cards favour (or are limited to) — they count for the pages processed from now on. */
+function FocusTopics({ jobId, topics, strict, onSaved }: { jobId: string; topics: string[]; strict: boolean; onSaved: () => void }) {
+	const [text, setText] = useState(topics.join(", "));
+	const [only, setOnly] = useState(strict);
+	const [note, setNote] = useState<string | null>(null);
+	const [busy, setBusy] = useState(false);
 
-/** Card text: **bold** and the English addition of a Latin term, as plain React (nothing is injected as HTML). */
-function Rich({ text }: { text: string }) {
+	async function save() {
+		setBusy(true);
+		setNote(null);
+		try {
+			const out = await api<{ focusTopics: string[] }>(`/api/create/jobs/${jobId}/focus`, patch({ focusTopics: text, focusStrict: only }));
+			setText(out.focusTopics.join(", "));
+			setNote("Saved — it counts for the pages that are processed from now on.");
+			onSaved();
+		} catch (e) {
+			setNote(e instanceof Error ? e.message : String(e));
+		} finally {
+			setBusy(false);
+		}
+	}
+
 	return (
-		<>
-			{text.split(/(\*\*[\s\S]+?\*\*|\[\[en:[\s\S]*?\]\])/g).map((part, i) =>
-				part.startsWith("**") ? (
-					<b key={i}>{part.slice(2, -2)}</b>
-				) : part.startsWith("[[en:") ? (
-					<span key={i} className="italic text-muted-foreground">
-						{" "}
-						({part.slice(5, -2)})
-					</span>
-				) : (
-					<Fragment key={i}>{part}</Fragment>
-				),
-			)}
-		</>
+		<details className="rounded-lg border" data-testid="focus-topics">
+			<summary className="cursor-pointer px-3 py-2 text-sm">
+				Focus topics <span className="text-xs text-muted-foreground">{topics.length > 0 ? `· ${topics.join(", ")}${strict ? " (only these)" : ""}` : "· none"}</span>
+			</summary>
+			<div className="flex flex-col gap-2 p-3 pt-0">
+				<Input value={text} onChange={(e) => setText(e.target.value)} placeholder="e.g. heart failure, troponin" aria-label="Focus topics" />
+				<label className="flex items-center gap-2 text-sm">
+					<input type="checkbox" className="size-4" checked={only} onChange={(e) => setOnly(e.target.checked)} />
+					Only these topics (skip pages about anything else)
+				</label>
+				<div className="flex items-center gap-2">
+					<Button size="xs" disabled={busy} onClick={() => void save()}>
+						Save
+					</Button>
+					{note && <span className="text-xs text-muted-foreground">{note}</span>}
+				</div>
+			</div>
+		</details>
 	);
 }
 
-/** A gap text with its gaps marked: {{c1::answer}} → the answer in colour. */
-function Gaps({ text }: { text: string }) {
-	const parts = text.split(/(\{\{c\d+::[\s\S]*?\}\})/g);
-	return (
-		<>
-			{parts.map((part, i) => {
-				const m = /^\{\{c(\d+)::([\s\S]*?)(?:::[\s\S]*)?\}\}$/.exec(part);
-				return m ? (
-					<span key={i} className="rounded bg-sky-400/15 px-1 text-sky-300" title={`Gap ${m[1]}`}>
-						<Rich text={m[2]!} />
-					</span>
-				) : (
-					<Rich key={i} text={part} />
-				);
-			})}
-		</>
-	);
-}
-
-/** A rendered card picture (a local file of the job, so Next's image optimiser has nothing to do). */
-function Picture({ src, alt, className }: { src: string; alt: string; className: string }) {
-	// eslint-disable-next-line @next/next/no-img-element
-	return <img src={src} alt={alt} className={`${className} rounded border`} loading="lazy" />;
-}
-
-/** One job of flashcards: its pages and draft cards, with throw-away, run-again and the adoption into a course. */
+/** One job of flashcards: its pages (open one in the focus screen), the choice of cards, duplicates, and the adoption into a course. */
 export function CardsJobDetail({
 	jobId,
 	courses,
@@ -89,11 +82,12 @@ export function CardsJobDetail({
 }) {
 	const [detail, setDetail] = useState<CardsJobDetail | null>(null);
 	const [error, setError] = useState<string | null>(null);
-	const [skip, setSkip] = useState<Set<string>>(new Set());
 	const [courseId, setCourseId] = useState(remembered);
 	const [newCourse, setNewCourse] = useState("");
 	const [note, setNote] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
+	const [focusPage, setFocusPage] = useState<number | null>(null);
+	const [showDuplicates, setShowDuplicates] = useState(false);
 
 	const load = useCallback(async () => {
 		try {
@@ -116,9 +110,9 @@ export function CardsJobDetail({
 
 	const effectiveCourse = courses.some((c) => c.id === courseId) ? courseId : (courses[0]?.id ?? "");
 
-	/** Drafts that can still be adopted: neither thrown away nor already a card. */
+	/** Drafts that can still be adopted: neither thrown away nor already a card — and of those, the selected ones. */
 	const eligible = useMemo(() => (detail?.pages ?? []).flatMap((p) => p.cards).filter((c) => !c.deleted && !c.adopted), [detail]);
-	const chosen = eligible.filter((c) => !skip.has(c.id));
+	const chosen = eligible.filter((c) => c.include);
 
 	async function act<T>(run: () => Promise<T>, then?: (out: T) => void) {
 		setBusy(true);
@@ -137,8 +131,11 @@ export function CardsJobDetail({
 
 	const start = (body: object) => act(() => api(`/api/create/jobs/${jobId}/start`, postJson(body)));
 	const stop = () => act(() => api(`/api/create/jobs/${jobId}/stop`, postJson({})));
-	const toggleDeleted = (c: CardDraft) =>
-		act(() => api(`/api/create/jobs/${jobId}/cards/${c.id}`, { ...postJson({ deleted: !c.deleted }), method: "PATCH" }));
+	const reload = useCallback(async () => {
+		await load();
+		onChanged();
+	}, [load, onChanged]);
+	const selectAll = (include: boolean) => act(() => api(`/api/create/jobs/${jobId}/include`, postJson({ cardIds: eligible.map((c) => c.id), include })));
 
 	async function adopt() {
 		let target = effectiveCourse;
@@ -151,11 +148,7 @@ export function CardsJobDetail({
 					onCourseAdded();
 				}
 				if (!target) throw new Error("Choose a course first, or name a new one.");
-				const all = chosen.length === eligible.length;
-				const out = await api<{ adopted: number }>(
-					`/api/create/jobs/${jobId}/adopt`,
-					postJson({ courseId: target, ...(all ? {} : { cardIds: chosen.map((c) => c.id) }) }),
-				);
+				const out = await api<{ adopted: number }>(`/api/create/jobs/${jobId}/adopt`, postJson({ courseId: target }));
 				try {
 					window.localStorage.setItem(LAST_COURSE_KEY, target);
 				} catch {
@@ -245,152 +238,63 @@ export function CardsJobDetail({
 				<Button size="sm" disabled={busy || chosen.length === 0} onClick={() => void adopt()} data-testid="adopt-button">
 					<CheckIcon /> Add {chosen.length} to my cards
 				</Button>
-				{note && (
-					<p className="w-full text-xs text-emerald-400" role="status" data-testid="adopt-note">
-						{note}
-					</p>
-				)}
+				<div className="flex w-full items-center gap-2 text-xs text-muted-foreground">
+					{eligible.length - chosen.length > 0 ? `${eligible.length - chosen.length} of ${eligible.length} not selected.` : `All ${eligible.length} selected.`}
+					<Button variant="ghost" size="xs" disabled={busy || eligible.length === 0} onClick={() => void selectAll(true)}>
+						Select all
+					</Button>
+					<Button variant="ghost" size="xs" disabled={busy || eligible.length === 0} onClick={() => void selectAll(false)}>
+						Select none
+					</Button>
+					{note && (
+						<span className="text-emerald-400" role="status" data-testid="adopt-note">
+							{note}
+						</span>
+					)}
+				</div>
 			</div>
 
-			<div className="flex flex-col gap-2">
-				{detail.pages.map((p) => (
-					<details key={p.page} open={detail.pages.length <= 4} className="rounded-lg border" data-testid="job-page">
-						<summary className="flex cursor-pointer items-center gap-2 px-3 py-2 text-sm">
-							<span className="font-medium">Page {p.page}</span>
-							{p.topic && <span className="min-w-0 truncate text-xs text-muted-foreground">{p.topic}</span>}
-							<span className="text-xs text-muted-foreground">
-								{p.status === "done" && !p.skipped && `${p.cards.filter((c) => !c.deleted).length} cards`}
-								{p.status === "done" && p.skipped && "skipped"}
-								{p.status === "running" && "working…"}
-								{p.status === "pending" && "waiting"}
-								{p.status === "error" && <span className="text-red-400">failed — {p.error}</span>}
-							</span>
-							{!running && (p.status === "error" || p.status === "done") && (
-								<Button
-									variant="outline"
-									size="xs"
-									className="ml-auto"
-									onClick={(e) => {
-										e.preventDefault();
-										void start({ pages: [p.page] });
-									}}
-								>
-									{p.status === "error" ? "Try again" : "Run again"}
-								</Button>
-							)}
-						</summary>
-						<ul className="flex flex-col gap-2 px-3 pb-3">
-							{p.cards.map((c) => (
-								<DraftCard
-									key={c.id}
-									c={c}
-									mediaUrl={mediaUrl}
-									selected={!skip.has(c.id)}
-									onSelect={(on) =>
-										setSkip((prev) => {
-											const next = new Set(prev);
-											if (on) next.delete(c.id);
-											else next.add(c.id);
-											return next;
-										})
-									}
-									onToggleDeleted={() => void toggleDeleted(c)}
-								/>
-							))}
-							{p.status === "done" && p.skipped && <li className="text-xs text-muted-foreground">Skipped: {p.skipReason || "nothing to learn on this page"}.</li>}
-							{p.status === "done" && !p.skipped && p.cards.length === 0 && <li className="text-xs text-muted-foreground">No cards on this page.</li>}
-							{p.dropped > 0 && (
-								<li className="text-xs text-muted-foreground">
-									{p.dropped} card{p.dropped === 1 ? "" : "s"} of the model {p.dropped === 1 ? "was" : "were"} left out (not usable).
+			{focusPage !== null ? (
+				<CardsFocus jobId={jobId} detail={detail} page={focusPage} onPage={setFocusPage} onClose={() => setFocusPage(null)} onReload={reload} onStart={start} />
+			) : (
+				<>
+					<FocusTopics key={`${detail.settings.focusTopics.join("|")}-${detail.settings.focusStrict}`} jobId={jobId} topics={detail.settings.focusTopics} strict={detail.settings.focusStrict} onSaved={() => void load()} />
+					<div>
+						<Button variant="outline" size="sm" onClick={() => setShowDuplicates((v) => !v)} data-testid="dup-toggle">
+							{showDuplicates ? "Hide duplicates" : "Look for duplicates"}
+						</Button>
+					</div>
+					{showDuplicates && <DuplicatesPanel jobId={jobId} mediaUrl={mediaUrl} onChanged={() => void reload()} />}
+
+					<ul className="flex flex-col gap-1.5" data-testid="job-pages">
+						{detail.pages.map((p) => {
+							const live = p.cards.filter((c) => !c.deleted);
+							const picked = live.filter((c) => c.include && !c.adopted).length;
+							return (
+								<li key={p.page} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm" data-testid="job-page">
+									<span className="w-16 shrink-0 font-medium">Page {p.page}</span>
+									<span className="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+										{p.topic}
+										{p.status === "done" && !p.skipped && ` · ${live.length} cards, ${picked} selected`}
+										{p.status === "done" && p.skipped && " · skipped"}
+										{p.status === "running" && " · working…"}
+										{p.status === "pending" && " · waiting"}
+										{p.status === "error" && <span className="text-red-400"> · failed — {p.error}</span>}
+									</span>
+									{!running && (p.status === "error" || p.status === "done") && (
+										<Button variant="ghost" size="xs" onClick={() => void start({ pages: [p.page] })}>
+											{p.status === "error" ? "Try again" : "Run again"}
+										</Button>
+									)}
+									<Button variant="outline" size="xs" onClick={() => setFocusPage(p.page)} data-testid="page-open">
+										Open
+									</Button>
 								</li>
-							)}
-						</ul>
-					</details>
-				))}
-			</div>
+							);
+						})}
+					</ul>
+				</>
+			)}
 		</div>
-	);
-}
-
-export function DraftCard({
-	c,
-	mediaUrl,
-	selected,
-	onSelect,
-	onToggleDeleted,
-}: {
-	c: CardDraft;
-	mediaUrl: (file: string) => string;
-	selected: boolean;
-	onSelect: (on: boolean) => void;
-	onToggleDeleted: () => void;
-}) {
-	const picture = c.image?.file ? mediaUrl(c.image.file) : null;
-	return (
-		<li className={`flex items-start gap-2 rounded-md border p-3 ${c.deleted ? "opacity-50" : ""}`} data-testid="draft">
-			{c.adopted || c.deleted ? (
-				<SquareIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground/40" aria-hidden />
-			) : (
-				<input
-					type="checkbox"
-					className="mt-1 size-4 shrink-0"
-					checked={selected}
-					onChange={(e) => onSelect(e.target.checked)}
-					aria-label="Add this card to my cards"
-				/>
-			)}
-			<div className="min-w-0 flex-1 text-sm">
-				<p className="mb-1 flex flex-wrap gap-x-2 text-xs text-muted-foreground">
-					<span>{TYPE_LABEL[c.type]}</span>
-					<span>{TIER_LABEL[c.tier]}</span>
-					{c.manual && <span>Made by you</span>}
-				</p>
-				{c.type === "image_occlusion" ? (
-					<>
-						<p className={`font-medium ${c.deleted ? "line-through" : ""}`}>{c.header}</p>
-						<p className="text-emerald-400">
-							<Rich text={c.label} />
-						</p>
-						<div className="mt-1 flex flex-wrap gap-2">
-							{c.questionFile && <Picture src={mediaUrl(c.questionFile)} alt="Question picture" className="max-h-48" />}
-							{c.answerFile && <Picture src={mediaUrl(c.answerFile)} alt="Answer picture" className="max-h-48" />}
-						</div>
-						{c.needsCheck && <p className="mt-1 text-xs text-amber-400">The covered place is a guess — please look at the picture.</p>}
-					</>
-				) : c.type === "cloze" ? (
-					<>
-						<p className={`whitespace-pre-wrap ${c.deleted ? "line-through" : ""}`}>
-							<Gaps text={c.text} />
-						</p>
-						{picture && <Picture src={picture} alt="Figure" className="mt-1 max-h-56" />}
-					</>
-				) : (
-					<>
-						{picture && c.image?.where === "front" && <Picture src={picture} alt="Figure" className="mb-1 max-h-48" />}
-						<p className={`whitespace-pre-wrap font-medium ${c.deleted ? "line-through" : ""}`}>
-							<Rich text={c.front} />
-						</p>
-						<p className="mt-0.5 whitespace-pre-wrap text-emerald-400">
-							<Rich text={c.back} />
-						</p>
-						{picture && c.image?.where === "extra" && <Picture src={picture} alt="Figure" className="mt-1 max-h-48" />}
-					</>
-				)}
-				{c.extra && (
-					<p className="mt-1 whitespace-pre-wrap border-l-2 pl-2 text-xs text-muted-foreground">
-						<Rich text={c.extra} />
-					</p>
-				)}
-				{c.warnings.length > 0 && !c.deleted && <p className="mt-1 text-xs text-amber-400">{c.warnings.join(" · ")}</p>}
-				{c.note && <p className="mt-1 text-xs italic text-muted-foreground">{c.note}</p>}
-			</div>
-			{c.adopted ? (
-				<span className="shrink-0 text-xs text-emerald-400">In your cards</span>
-			) : (
-				<Button variant="ghost" size="icon-xs" onClick={onToggleDeleted} title={c.deleted ? "Bring back" : "Throw away"} aria-label={c.deleted ? "Bring back" : "Throw away"}>
-					{c.deleted ? <Undo2Icon /> : <XIcon />}
-				</Button>
-			)}
-		</li>
 	);
 }
