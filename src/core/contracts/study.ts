@@ -57,6 +57,8 @@ export interface StudyCard {
 	createdAt: string;
 	/** True once the card is suspended / deleted (a later line wins). */
 	suspended?: boolean;
+	/** Study day "YYYY-MM-DD" on which a buried card is shown again (hidden before it). */
+	buriedUntil?: string;
 }
 
 /** One answered review — the ledger line. */
@@ -66,6 +68,9 @@ export interface StudyReview {
 	grade: StudyGrade;
 	/** Review duration in ms, when known (Anki import carries it). */
 	ms?: number;
+	/** An UNDO line: cancels the latest earlier review of this card (the ledger
+	 *  stays append-only; `effectiveReviews` drops the pair). `grade` repeats the undone one. */
+	undo?: true;
 }
 
 /** A card's derived memory + schedule state (never stored). */
@@ -112,6 +117,10 @@ export interface StudyCardView {
 	topic?: string;
 	front: string;
 	back: string;
+	/** The card's raw fields (the edit panel). */
+	fields: Record<string, string>;
+	/** Other cards of the same Anki note — an edit changes them too. */
+	siblings: number;
 	/** Bildcloze: figure left, gaps right — the page gives the card the full pane width. */
 	split: boolean;
 	/** Interval label per grade, e.g. { 1: "1m", 2: "6m", 3: "10m", 4: "3d" }. */

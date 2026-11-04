@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { StudyCard } from "../src/core/contracts/study.ts";
-import { cardDocument, renderCloze, renderFace, resolveMedia } from "../src/core/study-render.ts";
+import {
+	applyPicked,
+	cardDocument,
+	mcqCorrect,
+	mcqSuggestedGrade,
+	renderCloze,
+	renderFace,
+	resolveMedia,
+} from "../src/core/study-render.ts";
 
 const resolve = (name: string): string | null => (name === "gone.png" ? null : `data:x/${encodeURIComponent(name)}`);
 
@@ -108,7 +116,81 @@ describe("study card rendering", () => {
 	});
 
 	it("unsupported kinds say so instead of throwing", () => {
-		assert.match(renderFace(make({ kind: "mcq" }), "front", resolve).html, /not supported/);
+		const odd = make({ kind: "hologram" as StudyCard["kind"] });
+		assert.match(renderFace(odd, "front", resolve).html, /not supported/);
+	});
+
+	const OCC = make({
+		kind: "occlusion",
+		fields: {
+			Header: "Plexus",
+			QuestionImage: '<img src="q.png">',
+			AnswerImage: '<img src="a.png">',
+			Answer: "Fasciculus lateralis",
+			Extra: "Merkhilfe",
+			Source: "Skript",
+		},
+	});
+
+	it("occlusion: the front shows the masked image only, the back the unmasked one and the answer", () => {
+		const front = renderFace(OCC, "front", resolve).html;
+		assert.match(front, /class="header">Plexus/);
+		assert.match(front, /src="data:x\/q\.png"/);
+		assert.doesNotMatch(front, /a\.png|Fasciculus|Merkhilfe/);
+		const back = renderFace(OCC, "back", resolve).html;
+		assert.match(back, /src="data:x\/a\.png"/);
+		assert.doesNotMatch(back, /q\.png/);
+		assert.match(back, /Fasciculus lateralis/);
+		assert.match(back, /class="extra">Merkhilfe/);
+		assert.match(back, /class="source">Skript/);
+	});
+
+	const MCQ = make({
+		kind: "mcq",
+		fields: {
+			Question: "Which nerve?",
+			OptionA: "Ulnaris",
+			OptionB: "Radialis",
+			OptionC: "",
+			OptionD: "Medianus",
+			Correct: "B, D",
+			Explanation: "Because.",
+			Source: "Skript",
+		},
+	});
+
+	it("mcq: the front lists the filled options without the key, the back marks the correct ones", () => {
+		const front = renderFace(MCQ, "front", resolve).html;
+		assert.match(front, /Which nerve\?/);
+		assert.deepEqual([...front.matchAll(/data-key="([A-D])"/g)].map((m) => m[1]), ["A", "B", "D"]);
+		assert.doesNotMatch(front, /data-ok|Because|Correct:/);
+		const back = renderFace(MCQ, "back", resolve).html;
+		assert.deepEqual([...back.matchAll(/data-key="([A-D])" data-ok/g)].map((m) => m[1]), ["B", "D"]);
+		assert.match(back, /Correct: B, D/);
+		assert.match(back, /Because\./);
+		assert.match(back, /class="mcq-opts mcq-back" data-lh-picked=""/);
+	});
+
+	it("mcq: correct letters, suggested grade and the picked letters in the back", () => {
+		assert.deepEqual(mcqCorrect(MCQ.fields), ["B", "D"]);
+		assert.deepEqual(mcqCorrect({ Correct: "c" }), []); // letters are upper case
+		assert.equal(mcqSuggestedGrade(["B", "D"], ["D", "B"]), 3);
+		assert.equal(mcqSuggestedGrade(["B", "D"], ["B"]), 1);
+		assert.equal(mcqSuggestedGrade(["B", "D"], ["B", "D", "A"]), 1);
+		assert.equal(mcqSuggestedGrade(["B"], []), 1);
+		assert.equal(mcqSuggestedGrade([], ["A"]), 3); // nothing to check against
+		const back = renderFace(MCQ, "back", resolve).html;
+		assert.match(applyPicked(back, ["A", "B", "B", "X", '"><b>']), /data-lh-picked="A B"/);
+		assert.match(applyPicked(back, []), /data-lh-picked=""/);
+	});
+
+	it("the iframe document is script-free unless an MCQ front passes a nonce — then only that script runs", () => {
+		const doc = cardDocument("<p>x</p>", { dark: false, mcqNonce: "abc123" });
+		assert.match(doc, /script-src 'nonce-abc123'/);
+		assert.match(doc, /<script nonce="abc123">/);
+		assert.equal((doc.match(/<script/g) ?? []).length, 1);
+		assert.equal(/script-src [^;"]*/.exec(doc)?.[0], "script-src 'nonce-abc123'");
+		assert.doesNotMatch(cardDocument("<p>x</p>", { dark: false }), /script-src|<script/);
 	});
 
 	it("the iframe document carries a CSP that allows only data: media", () => {

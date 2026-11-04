@@ -114,14 +114,16 @@ const isCard = (v: unknown): v is StudyCard =>
 	isString(v.createdAt) &&
 	(v.topic === undefined || isString(v.topic)) &&
 	(v.variant === undefined || isNumber(v.variant)) &&
-	(v.suspended === undefined || typeof v.suspended === "boolean");
+	(v.suspended === undefined || typeof v.suspended === "boolean") &&
+	(v.buriedUntil === undefined || isString(v.buriedUntil));
 
 const isReview = (v: unknown): v is StudyReview =>
 	isRecord(v) &&
 	isString(v.cardId) &&
 	isString(v.at) &&
 	(v.grade === 1 || v.grade === 2 || v.grade === 3 || v.grade === 4) &&
-	(v.ms === undefined || isNumber(v.ms));
+	(v.ms === undefined || isNumber(v.ms)) &&
+	(v.undo === undefined || v.undo === true);
 
 /** Fold upsert + tombstone lines: last line per id wins, a tombstone removes,
  *  first-appearance order is kept (a revived record keeps its old position). */

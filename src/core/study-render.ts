@@ -13,13 +13,20 @@
  *    left, gaps right, same on both sides so nothing jumps when revealing.
  *    The active gap's mark sits on the figure as a percent box inside a
  *    wrapper that shrink-wraps the image, so it cannot drift.
+ *  - Bildverdeckung (occlusion): header + the covered image; the back swaps in
+ *    the uncovered image and adds the answer.
+ *  - MCQ: options A-D (empty ones left out). The front is the ONLY document
+ *    that runs a script — our fixed one (`MCQ_SCRIPT`, allowed by a CSP nonce,
+ *    deck scripts stay blocked): it toggles the clicked options and reports
+ *    them to the page. The back is static: the page writes the picked letters
+ *    into `data-lh-picked` (`applyPicked`) and CSS colours hit / missed / wrong.
  *  - media: `src="x"` and `[sound:x]` are resolved through a caller-supplied
  *    function — the server inlines the files as data: URIs, because the
  *    desktop shell only authorises /api requests of the MAIN frame, so a
  *    sandboxed iframe could not fetch them over HTTP.
  */
 
-import type { StudyCard } from "./contracts/study.ts";
+import type { StudyCard, StudyGrade } from "./contracts/study.ts";
 
 export type CardFace = "front" | "back";
 
@@ -144,6 +151,59 @@ function renderBildcloze(card: StudyCard, face: CardFace): RenderedFace {
 	return { html, split: true };
 }
 
+const header = (card: StudyCard, key: string): string => block("header", card.fields[key]);
+
+function renderOcclusion(card: StudyCard, face: CardFace): string {
+	if (face === "front") return header(card, "Header") + (card.fields.QuestionImage ?? "");
+	return (
+		header(card, "Header") +
+		(card.fields.AnswerImage ?? "") +
+		'<hr id="answer">' +
+		block("answer", card.fields.Answer) +
+		tail(card)
+	);
+}
+
+const MCQ_KEYS = ["A", "B", "C", "D"] as const;
+
+/** The correct option letters of an MCQ card ("B, C" → ["B", "C"]). */
+export function mcqCorrect(fields: Record<string, string>): string[] {
+	return MCQ_KEYS.filter((k) => (fields.Correct ?? "").replace(/[^A-D]/g, "").includes(k));
+}
+
+/** The grade to highlight after checking: Good when every correct option and no wrong one was picked, else Again. */
+export function mcqSuggestedGrade(correct: readonly string[], picked: readonly string[]): StudyGrade {
+	if (correct.length === 0) return 3;
+	const exact = correct.length === picked.length && correct.every((k) => picked.includes(k));
+	return exact ? 3 : 1;
+}
+
+/** Put the picked letters into a rendered MCQ back; CSS does the colouring. Non-letters are dropped. */
+export function applyPicked(html: string, picked: readonly string[]): string {
+	const letters = picked.filter((k) => (MCQ_KEYS as readonly string[]).includes(k));
+	return html.replace('data-lh-picked=""', `data-lh-picked="${[...new Set(letters)].join(" ")}"`);
+}
+
+function renderMcq(card: StudyCard, face: CardFace): string {
+	const correct = mcqCorrect(card.fields);
+	const options = MCQ_KEYS.flatMap((k) => {
+		const text = card.fields[`Option${k}`] ?? "";
+		if (text.trim().length === 0) return [];
+		const ok = face === "back" && correct.includes(k) ? " data-ok" : "";
+		return [`<div class="mcq-opt" data-key="${k}"${ok}><b>${k}.</b> ${text}</div>`];
+	}).join("");
+	const wrap = face === "front" ? `<div class="mcq-opts">${options}</div>` : `<div class="mcq-opts mcq-back" data-lh-picked="">${options}</div>`;
+	if (face === "front") return header(card, "Question") + wrap;
+	return (
+		header(card, "Question") +
+		wrap +
+		'<hr id="answer">' +
+		(card.fields.Correct ? `<div class="answer">Correct: ${card.fields.Correct}</div>` : "") +
+		block("mcq-explanation", card.fields.Explanation) +
+		block("source", card.fields.Source)
+	);
+}
+
 function renderCard(card: StudyCard, face: CardFace): RenderedFace {
 	if (card.kind === "cloze") {
 		if ((card.fields.LegendCloze ?? "") !== "") return renderBildcloze(card, face);
@@ -151,6 +211,8 @@ function renderCard(card: StudyCard, face: CardFace): RenderedFace {
 		return { html: `<div class="q">${text}</div>${face === "back" ? tail(card) : ""}`, split: false };
 	}
 	if (card.kind === "basic") return { html: renderBasic(card, face), split: false };
+	if (card.kind === "occlusion") return { html: renderOcclusion(card, face), split: false };
+	if (card.kind === "mcq") return { html: renderMcq(card, face), split: false };
 	return {
 		html: `<div class="q">Card type “${card.kind}” is not supported in the review screen yet.</div>`,
 		split: false,
@@ -187,17 +249,42 @@ hr#answer { border:none; border-top:1px solid var(--rule); margin:12px 0; }
 .legend-mark { position:absolute; box-sizing:border-box; border:3px solid #ff3b30; border-radius:50%; box-shadow:0 0 0 2px rgba(255,59,48,.35); pointer-events:none; }
 .bcsv-text { width:50%; height:100%; overflow-y:auto; box-sizing:border-box; padding:24px 32px; display:flex; flex-direction:column; justify-content:center; }
 .bcsv-legend-grid { column-count:2; column-gap:28px; }
+.header { font-weight:600; margin-bottom:8px; }
+.answer { margin-top:10px; font-weight:600; }
+.mcq-opts { margin:10px 0; }
+.mcq-opt { padding:9px 12px; margin-bottom:7px; border:1.5px solid var(--rule); border-radius:9px; cursor:pointer; }
+.mcq-opt b { margin-right:4px; }
+.mcq-opt.mcq-selected { border-color:var(--accent); background:rgba(26,111,214,.10); }
+.mcq-back .mcq-opt { cursor:default; }
+.mcq-back .mcq-opt[data-ok] { border-color:#1f9d55; border-style:dashed; background:rgba(31,157,85,.06); }
+.mcq-explanation { margin-top:10px; }
+${["A", "B", "C", "D"]
+	.map(
+		(k) =>
+			`.mcq-back[data-lh-picked~="${k}"] .mcq-opt[data-key="${k}"][data-ok]{border-style:solid;background:rgba(31,157,85,.16)}` +
+			`.mcq-back[data-lh-picked~="${k}"] .mcq-opt[data-key="${k}"]:not([data-ok]){border-color:#c53030;background:rgba(197,48,48,.16)}`,
+	)
+	.join("\n")}
 `;
 
+/** The one script an MCQ front may run (allowed by nonce): toggle the clicked option and tell the page
+ *  which letters are picked. `parent.postMessage` is the only thing it can reach. */
+export const MCQ_SCRIPT =
+	'(function(){var w=document.querySelector(".mcq-opts");if(!w)return;' +
+	"function report(){var p=[];w.querySelectorAll(\".mcq-opt.mcq-selected\").forEach(function(o){p.push(o.getAttribute(\"data-key\"));});parent.postMessage({lhMcq:p},\"*\");}" +
+	'w.querySelectorAll(".mcq-opt").forEach(function(o){o.addEventListener("click",function(){o.classList.toggle("mcq-selected");report();});});})();';
+
 /** A complete, self-contained document for the sandboxed iframe's `srcdoc`.
- *  The CSP allows only inline style and data: media — nothing else loads, and
- *  there is no script to run anyway. */
-export function cardDocument(body: string, opts: { dark: boolean }): string {
-	const csp = "default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'";
+ *  The CSP allows only inline style and data: media — nothing else loads. With
+ *  `mcqNonce` (an MCQ front) it also allows MCQ_SCRIPT, and nothing else, to run. */
+export function cardDocument(body: string, opts: { dark: boolean; mcqNonce?: string }): string {
+	const script = opts.mcqNonce ? `; script-src 'nonce-${opts.mcqNonce}'` : "";
+	const csp = `default-src 'none'; img-src data:; media-src data:; style-src 'unsafe-inline'${script}`;
 	const wrapped = body.startsWith('<div class="bcsv-layout"') ? body : `<div class="card">${body}</div>`;
+	const code = opts.mcqNonce ? `<script nonce="${opts.mcqNonce}">${MCQ_SCRIPT}</script>` : "";
 	return (
 		`<!doctype html><html class="${opts.dark ? "dark" : ""}"><head><meta charset="utf-8">` +
 		`<meta http-equiv="Content-Security-Policy" content="${escapeAttr(csp)}">` +
-		`<style>${CARD_CSS}</style></head><body>${wrapped}</body></html>`
+		`<style>${CARD_CSS}</style></head><body>${wrapped}${code}</body></html>`
 	);
 }

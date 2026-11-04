@@ -27,7 +27,7 @@ import type {
 	StudyReview,
 } from "./contracts/study.ts";
 import { boostedRetention, daysUntil, effectiveQuota, maxIntervalDays, newCardsPerDay } from "./deadline.ts";
-import { previewGrades, replay, type FsrsOptions } from "./fsrs.ts";
+import { effectiveReviews, previewGrades, replay, type FsrsOptions } from "./fsrs.ts";
 
 /** New cards per day for a course without an (active) deadline or override. */
 export const DEFAULT_NEW_PER_DAY = 20;
@@ -40,15 +40,31 @@ export type QueueBucket = "new" | "learning" | "review";
 
 export interface QueueClock {
 	now: Date;
-	/** Local calendar date of `now`, "YYYY-MM-DD". */
+	/** The study day of `now`, "YYYY-MM-DD" (the day rolls over at DAY_ROLLOVER_HOUR). */
 	today: string;
 }
 
-const pad = (n: number): string => String(n).padStart(2, "0");
+/** The study day ends at 04:00 local time, like Anki: whoever learns after midnight is still in the same day. */
+export const DAY_ROLLOVER_HOUR = 4;
 
-/** Local calendar date "YYYY-MM-DD" of a moment. */
+const pad = (n: number): string => String(n).padStart(2, "0");
+const fmt = (d: Date): string => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+
+/** Local midnight of the study day that contains `d`. */
+function studyDate(d: Date): Date {
+	const day = d.getHours() < DAY_ROLLOVER_HOUR ? d.getDate() - 1 : d.getDate();
+	return new Date(d.getFullYear(), d.getMonth(), day);
+}
+
+/** The study day "YYYY-MM-DD" of a moment. */
 export function localDay(d: Date): string {
-	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+	return fmt(studyDate(d));
+}
+
+/** A study day plus `n` days ("2026-11-04", 1 → "2026-11-05"). */
+export function addDays(day: string, n: number): string {
+	const [y, m, d] = day.split("-").map(Number) as [number, number, number];
+	return fmt(new Date(y, m - 1, d + n));
 }
 
 /** The clock for a moment (local time zone of the runtime). */
@@ -56,8 +72,10 @@ export function clockAt(now: Date): QueueClock {
 	return { now, today: localDay(now) };
 }
 
-function endOfLocalDay(d: Date): Date {
-	return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59, 999);
+/** The last millisecond of the study day containing `d`. */
+function endOfStudyDay(d: Date): Date {
+	const s = studyDate(d);
+	return new Date(s.getFullYear(), s.getMonth(), s.getDate() + 1, DAY_ROLLOVER_HOUR, 0, 0, -1);
 }
 
 export interface QueueItem {
@@ -92,14 +110,15 @@ export interface CourseQueue {
 	fsrs: FsrsOptions;
 }
 
+/** Reviews by card, undo pairs already cancelled (see effectiveReviews). */
 export function groupReviews(reviews: readonly StudyReview[]): Map<string, StudyReview[]> {
-	const byCard = new Map<string, StudyReview[]>();
+	const raw = new Map<string, StudyReview[]>();
 	for (const r of reviews) {
-		const list = byCard.get(r.cardId);
+		const list = raw.get(r.cardId);
 		if (list) list.push(r);
-		else byCard.set(r.cardId, [r]);
+		else raw.set(r.cardId, [r]);
 	}
-	return byCard;
+	return new Map([...raw].map(([id, list]) => [id, effectiveReviews(list)]));
 }
 
 /** Days left while the deadline (buffer included) has not passed; null otherwise. */
@@ -126,7 +145,7 @@ export function buildQueue(
 	const fsrsOpts = courseFsrsOptions(course, clock.today);
 	const dueNow = clock.now.getTime();
 	const aheadUntil = dueNow + LEARN_AHEAD_MINUTES * 60_000;
-	const dayEnd = endOfLocalDay(clock.now).getTime();
+	const dayEnd = endOfStudyDay(clock.now).getTime();
 
 	const learning: QueueItem[] = [];
 	const learnAhead: QueueItem[] = [];
@@ -146,6 +165,8 @@ export function buildQueue(
 		}
 		const first = reviews!.reduce((min, r) => (r.at < min ? r.at : min), reviews![0]!.at);
 		if (localDay(new Date(first)) === clock.today) introducedToday++;
+		// a buried card is counted but not offered until its day
+		if (card.buriedUntil && card.buriedUntil > clock.today) continue;
 		const due = Date.parse(state.due);
 		if (state.phase === 1 || state.phase === 3) {
 			if (due <= dueNow) learning.push({ card, state, bucket: "learning" });
@@ -169,6 +190,7 @@ export function buildQueue(
 	const todaysNew = Math.max(0, newQuota - introducedToday);
 	// core knowledge first; Array#sort is stable, so card order holds within each group
 	const newItems = unseenCards
+		.filter((card) => !(card.buriedUntil && card.buriedUntil > clock.today))
 		.map((card): QueueItem => ({ card, state: null, bucket: "new" }))
 		.sort((a, b) => Number(b.card.core) - Number(a.card.core))
 		.slice(0, todaysNew);
@@ -191,6 +213,18 @@ export function buildQueue(
 		daysLeft: left,
 		fsrs: fsrsOpts,
 	};
+}
+
+/** A specific card as a queue item, wherever it stands (undo and edit show a card the queue would not pick). */
+export function itemForCard(
+	card: StudyCard,
+	reviewsByCard: ReadonlyMap<string, readonly StudyReview[]>,
+	fsrs: FsrsOptions,
+): QueueItem {
+	const reviews = reviewsByCard.get(card.id);
+	const state = reviews && reviews.length > 0 ? replay(card.id, reviews, fsrs) : null;
+	const bucket: QueueBucket = !state ? "new" : state.phase === 2 ? "review" : "learning";
+	return { card, state, bucket };
 }
 
 /** The next card for step `step` (0 = first card of the session), or null when the course is done for today. */

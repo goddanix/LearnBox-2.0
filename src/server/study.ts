@@ -13,17 +13,21 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { PATHS } from "../../config.ts";
 import type {
+	StudyCard,
 	StudyCardView,
 	StudyCourseSummary,
 	StudyGrade,
 	StudyNextResult,
 } from "../core/contracts/study.ts";
 import type { StudyStore } from "../core/ports.ts";
+import { effectiveReviews } from "../core/fsrs.ts";
 import {
+	addDays,
 	buildQueue,
 	clockAt,
 	courseOverviews,
 	groupReviews,
+	itemForCard,
 	pickNext,
 	previewIntervals,
 	type CourseQueue,
@@ -101,7 +105,22 @@ export function studyCourses(now: Date = new Date(), deps: StudyDeps = defaultDe
 	}));
 }
 
-function view(item: QueueItem, queue: CourseQueue, now: Date, mediaDir: string): StudyCardView {
+/** Cards of the same Anki note (other than `card` itself); a card without a shared note has none. */
+function siblingsOf(card: StudyCard, cards: readonly StudyCard[]): StudyCard[] {
+	if (card.origin.kind !== "anki-import") return [];
+	const noteId = card.origin.noteId;
+	return cards.filter(
+		(c) => c.id !== card.id && c.origin.kind === "anki-import" && c.origin.noteId === noteId,
+	);
+}
+
+function view(
+	item: QueueItem,
+	queue: CourseQueue,
+	cards: readonly StudyCard[],
+	now: Date,
+	mediaDir: string,
+): StudyCardView {
 	const resolve = mediaResolver(mediaDir);
 	const front = renderFace(item.card, "front", resolve);
 	const back = renderFace(item.card, "back", resolve);
@@ -114,32 +133,45 @@ function view(item: QueueItem, queue: CourseQueue, now: Date, mediaDir: string):
 		front: front.html,
 		back: back.html,
 		split: front.split,
+		fields: item.card.fields,
+		siblings: siblingsOf(item.card, cards).length,
 		intervals: previewIntervals(item, queue, now),
 	};
 }
 
+/**
+ * The state of a course after a change: the queue's pick for `step`, or — when
+ * `showCardId` is given (undo, edit, restore) — exactly that card.
+ */
 function nextResult(
 	courseId: string,
 	step: number,
 	now: Date,
 	deps: StudyDeps,
+	showCardId?: string,
 ): StudyNextResult {
 	const course = deps.store.readCourses().find((c) => c.id === courseId);
 	if (!course) throw new StudyInputError("Unknown course", 404);
-	const queue = buildQueue(
-		course,
-		deps.store.readCards(),
-		groupReviews(deps.store.readReviews()),
-		clockAt(now),
-	);
-	const item = pickNext(queue, step);
+	const cards = deps.store.readCards();
+	const reviews = groupReviews(deps.store.readReviews());
+	const queue = buildQueue(course, cards, reviews, clockAt(now));
+	let item: QueueItem | null;
+	if (showCardId === undefined) {
+		item = pickNext(queue, step);
+	} else {
+		const card = cards.find((c) => c.id === showCardId && c.courseId === courseId && !c.suspended);
+		item = card ? itemForCard(card, reviews, queue.fsrs) : null;
+	}
 	return {
 		courseId,
 		counts: queue.counts,
 		step,
-		card: item ? view(item, queue, now, deps.mediaDir) : null,
+		card: item ? view(item, queue, cards, now, deps.mediaDir) : null,
 	};
 }
+
+const cleanStep = (step: unknown): number =>
+	typeof step === "number" ? Math.max(0, Math.trunc(step) || 0) : 0;
 
 /** The next card of a course; `step` 0 starts a session. */
 export function studyNext(
@@ -148,7 +180,7 @@ export function studyNext(
 	now: Date = new Date(),
 	deps: StudyDeps = defaultDeps(),
 ): StudyNextResult {
-	return nextResult(courseId, Math.max(0, Math.trunc(step) || 0), now, deps);
+	return nextResult(courseId, cleanStep(step), now, deps);
 }
 
 /** Record one answer and return the card after it (`step` is the answered card's step). */
@@ -171,6 +203,106 @@ export function studyAnswer(
 		grade: input.grade as StudyGrade,
 		...(ms === undefined ? {} : { ms }),
 	});
-	const step = Math.max(0, Math.trunc(input.step ?? 0) || 0) + 1;
-	return nextResult(courseId, step, now, deps);
+	return nextResult(courseId, cleanStep(input.step) + 1, now, deps);
+}
+
+/**
+ * Take back the latest review of a card: appends a compensating line (the
+ * ledger is never rewritten) and shows the card again at the step it was
+ * answered in.
+ */
+export function studyUndo(
+	input: { courseId: string; cardId: string; step?: number },
+	now: Date = new Date(),
+	deps: StudyDeps = defaultDeps(),
+): StudyNextResult {
+	const { courseId, cardId } = input;
+	const card = deps.store.readCards().find((c) => c.id === cardId && c.courseId === courseId);
+	if (!card) throw new StudyInputError("Unknown card", 404);
+	const own = deps.store.readReviews().filter((r) => r.cardId === cardId);
+	const last = effectiveReviews(own).at(-1);
+	if (!last) throw new StudyInputError("Nothing to undo", 400);
+	// never earlier than the review it cancels (clock skew would reorder the pair)
+	const at = new Date(Math.max(now.getTime(), Date.parse(last.at) + 1)).toISOString();
+	deps.store.appendReview({ cardId, at, grade: last.grade, undo: true });
+	return nextResult(courseId, cleanStep(input.step), now, deps, cardId);
+}
+
+/** Largest edited field (characters): a card is text, not a document store. */
+const MAX_FIELD_CHARS = 200_000;
+
+export type StudyCardAction = "suspend" | "unsuspend" | "bury" | "unbury" | "edit";
+
+/**
+ * Change a card outside of answering it. suspend/bury (and their takebacks)
+ * touch that card only — the step stays; `edit` rewrites the named fields on
+ * the card and on every other card of the same Anki note.
+ */
+export function studyCardAction(
+	input: {
+		courseId: string;
+		cardId: string;
+		action: StudyCardAction;
+		fields?: Record<string, string>;
+		step?: number;
+	},
+	now: Date = new Date(),
+	deps: StudyDeps = defaultDeps(),
+): StudyNextResult {
+	const { courseId, cardId, action } = input;
+	const step = cleanStep(input.step);
+	const cards = deps.store.readCards();
+	const card = cards.find((c) => c.id === cardId && c.courseId === courseId);
+	if (!card) throw new StudyInputError("Unknown card", 404);
+
+	switch (action) {
+		case "suspend": {
+			deps.store.upsertCard({ ...card, suspended: true });
+			return nextResult(courseId, step, now, deps);
+		}
+		case "unsuspend": {
+			const { suspended: _drop, ...rest } = card;
+			deps.store.upsertCard(rest);
+			return nextResult(courseId, step, now, deps, cardId);
+		}
+		case "bury": {
+			// hidden for the rest of today's study day
+			deps.store.upsertCard({ ...card, buriedUntil: addDays(clockAt(now).today, 1) });
+			return nextResult(courseId, step, now, deps);
+		}
+		case "unbury": {
+			const { buriedUntil: _drop, ...rest } = card;
+			deps.store.upsertCard(rest);
+			return nextResult(courseId, step, now, deps, cardId);
+		}
+		case "edit": {
+			const edits = input.fields;
+			if (typeof edits !== "object" || edits === null || Array.isArray(edits)) {
+				throw new StudyInputError("fields must be an object", 400);
+			}
+			const names = Object.keys(edits);
+			if (names.length === 0) throw new StudyInputError("Nothing to edit", 400);
+			for (const name of names) {
+				const value = edits[name];
+				if (!(name in card.fields)) throw new StudyInputError(`Unknown field: ${name}`, 400);
+				if (typeof value !== "string") throw new StudyInputError(`Field ${name} must be text`, 400);
+				if (value.length > MAX_FIELD_CHARS) throw new StudyInputError(`Field ${name} is too long`, 400);
+			}
+			const changed = [card, ...siblingsOf(card, cards)].flatMap((c) => {
+				const fields = { ...c.fields };
+				let touched = false;
+				for (const name of names) {
+					if (name in fields && fields[name] !== edits[name]) {
+						fields[name] = edits[name]!;
+						touched = true;
+					}
+				}
+				return touched ? [{ ...c, fields }] : [];
+			});
+			deps.store.upsertCards(changed);
+			return nextResult(courseId, step, now, deps, cardId);
+		}
+		default:
+			throw new StudyInputError("Unknown action", 400);
+	}
 }

@@ -3,12 +3,14 @@ import { describe, it } from "node:test";
 import type { StudyCard, StudyCourse, StudyReview } from "../src/core/contracts/study.ts";
 import {
 	DEFAULT_NEW_PER_DAY,
+	addDays,
 	buildQueue,
 	clockAt,
 	courseFsrsOptions,
 	courseOverviews,
 	formatDelay,
 	groupReviews,
+	itemForCard,
 	localDay,
 	pickNext,
 	previewIntervals,
@@ -53,6 +55,64 @@ describe("study queue", () => {
 	it("localDay formats the local calendar date", () => {
 		assert.equal(localDay(new Date(2026, 0, 5, 23, 59)), "2026-01-05");
 		assert.equal(clock.today, "2026-11-04");
+	});
+
+	it("the study day rolls over at 04:00, not at midnight", () => {
+		assert.equal(localDay(new Date(2026, 10, 5, 3, 59)), "2026-11-04");
+		assert.equal(localDay(new Date(2026, 10, 5, 4, 0)), "2026-11-05");
+		assert.equal(localDay(new Date(2026, 0, 1, 1, 0)), "2025-12-31"); // across the year
+		assert.equal(addDays("2026-02-28", 1), "2026-03-01");
+		assert.equal(addDays("2026-11-04", -4), "2026-10-31");
+	});
+
+	it("a card first answered after midnight still counts against the previous day's new quota", () => {
+		const a = card();
+		const reviews = [review(a.id, new Date(2026, 10, 5, 1, 0))];
+		const lateNight = buildQueue(course(), [a], groupReviews(reviews), clockAt(new Date(2026, 10, 5, 2, 0)));
+		assert.equal(lateNight.introducedToday, 1);
+		const morning = buildQueue(course(), [a], groupReviews(reviews), clockAt(new Date(2026, 10, 5, 5, 0)));
+		assert.equal(morning.introducedToday, 0);
+	});
+
+	it("a buried card stays out of the queue until its day, but still counts as a card", () => {
+		const fresh = card({ buriedUntil: "2026-11-05" });
+		const seen = card({ buriedUntil: "2026-11-05" });
+		const other = card();
+		const history = [review(seen.id, minutes(-60 * 24))]; // learning step long due
+		const q = queueOf(course(), [fresh, seen, other], history);
+		assert.deepEqual(q.new.map((i) => i.card.id), [other.id]);
+		assert.equal(q.learning.length, 0);
+		assert.equal(q.total, 3);
+		// the next study day they are back
+		const tomorrow = buildQueue(
+			course(),
+			[fresh, seen, other],
+			groupReviews(history),
+			clockAt(new Date(2026, 10, 5, 10, 0)),
+		);
+		assert.equal(tomorrow.new.length, 2);
+		assert.equal(tomorrow.learning.length, 1);
+	});
+
+	it("an undone review no longer introduces the card or schedules it", () => {
+		const a = card();
+		const answered = review(a.id, minutes(-5));
+		const undone: StudyReview = { ...review(a.id, minutes(-4)), undo: true };
+		const before = queueOf(course(), [a], [answered]);
+		assert.equal(before.introducedToday, 1);
+		assert.equal(before.new.length, 0);
+		const after = queueOf(course(), [a], [answered, undone]);
+		assert.equal(after.introducedToday, 0);
+		assert.deepEqual(after.new.map((i) => i.card.id), [a.id]);
+	});
+
+	it("itemForCard shows any card in the bucket it belongs to", () => {
+		const a = card();
+		const b = card();
+		const by = groupReviews([review(a.id, minutes(-5))]);
+		assert.equal(itemForCard(b, by, {}).bucket, "new");
+		assert.equal(itemForCard(b, by, {}).state, null);
+		assert.equal(itemForCard(a, by, {}).bucket, "learning");
 	});
 
 	it("without a deadline: default quota, core first, only the course's live cards", () => {

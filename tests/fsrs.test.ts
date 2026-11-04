@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { applyReview, newCardState, replay, retrievability } from "../src/core/fsrs.ts";
+import { applyReview, effectiveReviews, newCardState, replay, retrievability } from "../src/core/fsrs.ts";
 import type { StudyReview } from "../src/core/contracts/study.ts";
 
 const T0 = new Date("2026-11-04T08:00:00Z");
@@ -51,5 +51,25 @@ describe("FSRS review-ledger fold", () => {
 		const late = retrievability(s, day(60));
 		assert.ok(soon > late);
 		assert.equal(retrievability(null, T0), 0);
+	});
+
+	it("an undo line cancels the latest earlier review — the ledger only grows", () => {
+		const r1: StudyReview = { cardId: "c1", at: T0.toISOString(), grade: 3 };
+		const r2: StudyReview = { cardId: "c1", at: day(1).toISOString(), grade: 1 };
+		const undo2: StudyReview = { cardId: "c1", at: day(1.5).toISOString(), grade: 1, undo: true };
+		assert.deepEqual(effectiveReviews([r1, r2, undo2]), [r1]);
+		assert.deepEqual(replay("c1", [r1, r2, undo2]), replay("c1", [r1]));
+		// the undone answer can be given again, and a second undo reaches further back
+		const r3: StudyReview = { cardId: "c1", at: day(2).toISOString(), grade: 4 };
+		const undo3: StudyReview = { cardId: "c1", at: day(2.5).toISOString(), grade: 4, undo: true };
+		const undo1: StudyReview = { cardId: "c1", at: day(3).toISOString(), grade: 3, undo: true };
+		assert.deepEqual(effectiveReviews([r1, r2, undo2, r3]), [r1, r3]);
+		assert.deepEqual(effectiveReviews([r1, r2, undo2, r3, undo3, undo1]), []);
+		// undoing a card's only review makes it unseen again
+		assert.equal(replay("c1", [r1, { ...undo1, at: day(0.5).toISOString() }]), null);
+	});
+
+	it("an undo with nothing before it changes nothing", () => {
+		assert.deepEqual(effectiveReviews([{ cardId: "c1", at: T0.toISOString(), grade: 3, undo: true }]), []);
 	});
 });

@@ -86,17 +86,27 @@ export function applyReview(
 	return toState(cardId, scheduler(opts).next(card, at, GRADE[grade]).card);
 }
 
+/** One card's review lines in time order with every UNDO line and the review it
+ *  cancels removed (an undo with nothing left to cancel is ignored). */
+export function effectiveReviews(reviews: readonly StudyReview[]): StudyReview[] {
+	const kept: StudyReview[] = [];
+	for (const r of [...reviews].sort((a, b) => a.at.localeCompare(b.at))) {
+		if (r.undo) kept.pop();
+		else kept.push(r);
+	}
+	return kept;
+}
+
 /** Fold a card's reviews (any order) into its current state; null = none. */
 export function replay(
 	cardId: string,
 	reviews: readonly StudyReview[],
 	opts: FsrsOptions = {},
 ): StudyCardState | null {
-	const ordered = reviews
-		.filter((r) => r.cardId === cardId)
-		.sort((a, b) => a.at.localeCompare(b.at));
 	let state: StudyCardState | null = null;
-	for (const r of ordered) state = applyReview(cardId, state, r.grade, new Date(r.at), opts);
+	for (const r of effectiveReviews(reviews.filter((x) => x.cardId === cardId))) {
+		state = applyReview(cardId, state, r.grade, new Date(r.at), opts);
+	}
 	return state;
 }
 
