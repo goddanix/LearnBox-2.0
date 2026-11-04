@@ -23,6 +23,9 @@ import type {
 	Position,
 	CoverageEntry,
 	SessionCheckpoint,
+	StudyCard,
+	StudyCourse,
+	StudyReview,
 	TurnUsage,
 	NotesSource,
 } from "./contracts.ts";
@@ -222,3 +225,33 @@ export interface AuthStore {
 	deleteAuthVar(name: string): void;
 }
 
+// ─── StudyStore — courses, flashcards, review ledger (data/study) ────────────
+// Same doctrine as the graph: append-only. Courses and cards are UPSERT lines
+// (the LAST line for an id wins; a removal is a tombstone line), reviews are
+// pure appends. A card's schedule is never stored — core/fsrs.ts folds the
+// review ledger into it on every read.
+
+export interface StudyStore {
+	/** Append the full current record of a course (last line for the id wins). */
+	upsertCourse(course: StudyCourse): void;
+	/** Tombstone a course. Its cards and reviews are kept (a later upsert revives it). */
+	removeCourse(id: string): void;
+	/** Every live course, folded last-wins, in first-appearance order. */
+	readCourses(): StudyCourse[];
+
+	/** Append the full current record of a card (edit, suspend, move: last wins). */
+	upsertCard(card: StudyCard): void;
+	/** Append many cards in ONE write (an import / a PDF job's output). */
+	upsertCards(cards: readonly StudyCard[]): void;
+	/** Tombstone a card. Its reviews stay in the ledger. */
+	removeCard(id: string): void;
+	/** Every live card, folded last-wins, in first-appearance order. */
+	readCards(): StudyCard[];
+
+	/** Append one answered review. */
+	appendReview(review: StudyReview): void;
+	/** Append many reviews in ONE write (the Anki history import). */
+	appendReviews(reviews: readonly StudyReview[]): void;
+	/** Every review line in append order. */
+	readReviews(): StudyReview[];
+}

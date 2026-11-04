@@ -26,6 +26,10 @@ export const PATHS = {
 	/** Chat sessions (AI SDK UIMessage transcripts, one JSON file per chat). */
 	chats: path.join(DATA_ROOT, "chats"),
 	graph: path.join(DATA_ROOT, "graph"),
+	/** Study ledgers: courses, flashcards, reviews (src/store/study.ts). */
+	study: path.join(DATA_ROOT, "study"),
+	/** Media files (images, audio) the study cards reference by file name. */
+	studyMedia: path.join(DATA_ROOT, "study", "media"),
 	/** Debug artifacts (env-gated): data/debug/provider-events/<chatId>.jsonl
 	 * raw provider stream recordings (src/agent/provider-events.ts). */
 	debug: path.join(DATA_ROOT, "debug"),
@@ -143,3 +147,14 @@ export const PROMPTS_OVERRIDE_DIR = path.join(DATA_ROOT, "prompts");
 export const AUTH_FILE = process.env.LH_AUTH_FILE
 	? path.resolve(process.env.LH_AUTH_FILE)
 	: path.join(ROOT, "auth.json");
+
+/**
+ * The study ledgers (contracts/study.ts), append-only JSONL under
+ * data/study/ — exclusively src/store/study.ts's. Courses and cards are
+ * last-line-wins upserts with tombstones; reviews are pure appends.
+ */
+export const STUDY_FILES = {
+	courses: path.join(PATHS.study, "courses.jsonl"),
+	cards: path.join(PATHS.study, "cards.jsonl"),
+	reviews: path.join(PATHS.study, "reviews.jsonl"),
+} as const;
