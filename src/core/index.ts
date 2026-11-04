@@ -57,6 +57,8 @@ export * from "./cost-summary.ts";
 export * from "./fuzzy.ts";
 export * from "./deadline.ts"; // study: deadline math (ported Deadline Scheduler)
 export * from "./fsrs.ts"; // study: FSRS review-ledger fold
+export * from "./study-queue.ts"; // study: next-card queue (Deadline Scheduler + StudyQueueOrder rules)
+export * from "./study-render.ts"; // study: card → script-free HTML for the review screen
 export * from "./anki-import.ts"; // study: pure Anki-row → study mapping
 // settings.ts + settings-resolution.ts (settings-storage wave, 2026-09-19):
 // the user-settings record's shape/sanitizer (pure) and its fully-resolved

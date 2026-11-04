@@ -24,12 +24,19 @@ const GRADE: Record<StudyGrade, Grade> = {
 	4: Rating.Easy,
 };
 
+const schedulers = new Map<string, ReturnType<typeof fsrs>>();
+
+/** One scheduler per option pair — a replay builds one per review otherwise. */
 function scheduler(opts: FsrsOptions) {
-	return fsrs({
-		enable_fuzz: false,
-		request_retention: opts.desiredRetention ?? 0.9,
-		maximum_interval: opts.maximumInterval ?? 36500,
-	});
+	const retention = opts.desiredRetention ?? 0.9;
+	const maxInterval = opts.maximumInterval ?? 36500;
+	const key = `${retention}|${maxInterval}`;
+	let s = schedulers.get(key);
+	if (!s) {
+		s = fsrs({ enable_fuzz: false, request_retention: retention, maximum_interval: maxInterval });
+		schedulers.set(key, s);
+	}
+	return s;
 }
 
 function toCard(s: StudyCardState): Card {
@@ -97,4 +104,20 @@ export function replay(
 export function retrievability(state: StudyCardState | null, now: Date): number {
 	if (!state || !state.lastReview) return 0;
 	return scheduler({}).retrievability(toCard(state), now);
+}
+
+/** What each of the four grades WOULD do to a card right now (the interval
+ *  preview under the answer buttons); nothing is stored. */
+export function previewGrades(
+	cardId: string,
+	prev: StudyCardState | null,
+	at: Date,
+	opts: FsrsOptions = {},
+): Record<StudyGrade, StudyCardState> {
+	return {
+		1: applyReview(cardId, prev, 1, at, opts),
+		2: applyReview(cardId, prev, 2, at, opts),
+		3: applyReview(cardId, prev, 3, at, opts),
+		4: applyReview(cardId, prev, 4, at, opts),
+	};
 }

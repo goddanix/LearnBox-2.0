@@ -81,3 +81,48 @@ export interface StudyCardState {
 	lastReview?: string;
 	learningSteps: number;
 }
+
+// ─── review-screen wire types (GET/POST /api/study/*) ────────────────────────
+
+/** Cards waiting in a course's queue right now. */
+export interface StudyQueueCounts {
+	new: number;
+	learning: number;
+	review: number;
+}
+
+/** One row of the "which course?" screen. */
+export interface StudyCourseSummary {
+	id: string;
+	name: string;
+	deadline?: string;
+	/** Days to the deadline while it is active (buffer included), else null. */
+	daysLeft: number | null;
+	total: number;
+	counts: StudyQueueCounts;
+	newQuota: number;
+}
+
+/** The card on screen: both sides pre-rendered (script-free HTML, media inlined as data: URIs). */
+export interface StudyCardView {
+	id: string;
+	kind: StudyCardKind;
+	bucket: "new" | "learning" | "review";
+	core: boolean;
+	topic?: string;
+	front: string;
+	back: string;
+	/** Bildcloze: figure left, gaps right — the page gives the card the full pane width. */
+	split: boolean;
+	/** Interval label per grade, e.g. { 1: "1m", 2: "6m", 3: "10m", 4: "3d" }. */
+	intervals: Record<StudyGrade, string>;
+}
+
+/** Answer to "next card" — `card` is null once the course is done for today. */
+export interface StudyNextResult {
+	courseId: string;
+	counts: StudyQueueCounts;
+	/** Step counter the client sends back (the queue pattern's position). */
+	step: number;
+	card: StudyCardView | null;
+}
