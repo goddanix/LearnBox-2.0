@@ -33,7 +33,7 @@ import {
 	type AnkiNoteTypeRow,
 } from "../src/core/anki-import.ts";
 import { replay } from "../src/core/fsrs.ts";
-import { copyAnkiMedia, findAnkiCollections, readAnkiCollection } from "../src/store/anki-source.ts";
+import { copyAnkiMedia, findAnkiCollections, readAnkiCollection, stripUnicase } from "../src/store/anki-source.ts";
 import { inspectAnki, listAnkiCollections, runAnkiImport } from "../src/server/anki-import.ts";
 import { StudyInputError } from "../src/server/study.ts";
 import { createStudyStore, type StudyFiles } from "../src/store/study.ts";
@@ -163,6 +163,29 @@ describe("anki-import against a real Anki collection", () => {
 		const after_ = fs.statSync(FIXTURE);
 		assert.equal(after_.mtimeMs, stat.mtimeMs);
 		assert.equal(after_.size, stat.size);
+	});
+
+	it("strips Anki's custom collation from the copy: newer SQLite builds cannot plan queries on `fields` with it", () => {
+		// Electron 44's SQLite (3.53) fails every query on `fields` with "no query solution" while the
+		// collation Anki registers itself ("unicase") is missing; the dev Node's older SQLite does not,
+		// so this checks the cure (the declaration is gone, the rows are the same), not the symptom.
+		const { DatabaseSync } = process.getBuiltinModule("node:sqlite") as typeof import("node:sqlite");
+		const copy = path.join(root, "strip.anki2");
+		fs.copyFileSync(FIXTURE, copy);
+		const sqlOf = (db: InstanceType<typeof DatabaseSync>) =>
+			(db.prepare("select group_concat(sql, ' ') s from sqlite_master").get() as { s: string }).s;
+		const rows = "select ntid, ord, name from fields order by ntid, ord";
+		const db = new DatabaseSync(copy);
+		assert.match(sqlOf(db), /unicase/i);
+		const before = db.prepare(rows).all();
+		assert.ok(before.length > 0);
+		stripUnicase(db);
+		db.close();
+		const patched = new DatabaseSync(copy, { readOnly: true });
+		assert.doesNotMatch(sqlOf(patched), /unicase/i);
+		assert.deepEqual(patched.prepare(rows).all(), before);
+		assert.equal((patched.prepare("select count(*) c from notes").get() as { c: number }).c, readAnkiCollection(FIXTURE).notes.length);
+		patched.close();
 	});
 
 	it("refuses a missing file and a non-collection file", () => {

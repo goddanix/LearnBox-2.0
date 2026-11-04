@@ -37,6 +37,36 @@ const SCHEDULER_KEY = "deadline_scheduler_deadlines";
 
 const SIDECARS = ["", "-wal", "-shm"] as const;
 
+type Db = InstanceType<Sqlite["DatabaseSync"]>;
+
+/**
+ * Anki declares its own collation, "unicase", on name columns and their indexes, and only
+ * Anki's SQLite registers it. Older SQLite builds read such a table without it; the one in
+ * Electron 44 (3.53) does not — planning ANY query on `fields` fails with "no query solution"
+ * (or "no such collation sequence: unicase"). The copy is ours and only ever read, so the
+ * declaration is taken out of its schema: the indexes ordered by it are dropped, then the
+ * table definitions are rewritten without it. Best effort: if this fails the real query
+ * reports the real error.
+ */
+export function stripUnicase(db: Db): void {
+	try {
+		// defensive mode (Node 24+) would forbid editing the schema; older Nodes lack the switch
+		if (typeof db.enableDefensive === "function") db.enableDefensive(false);
+		const indexes = db
+			.prepare("select name from sqlite_master where type = 'index' and sql like '%unicase%'")
+			.all() as { name: string }[];
+		for (const { name } of indexes) db.exec(`drop index "${name.replaceAll('"', '""')}"`);
+		db.exec("pragma writable_schema = on");
+		db.exec(
+			"update sqlite_master set sql = replace(replace(sql, 'COLLATE unicase', ''), 'collate unicase', '') " +
+				"where type = 'table' and sql like '%unicase%'",
+		);
+		db.exec("pragma writable_schema = off");
+	} catch {
+		// see above
+	}
+}
+
 /** Read every table the import needs from a COPY of the collection at `dbPath`. */
 export function readAnkiCollection(dbPath: string): AnkiCollection {
 	if (!fs.existsSync(dbPath)) throw new Error(`Anki collection not found: ${dbPath}`);
@@ -48,7 +78,14 @@ export function readAnkiCollection(dbPath: string): AnkiCollection {
 			// the path is the owner's collection, outside the project: nothing to trace
 			if (fs.existsSync(/*turbopackIgnore: true*/ src)) fs.copyFileSync(/*turbopackIgnore: true*/ src, `${copy}${suffix}`);
 		}
-		const db = new (sqlite().DatabaseSync)(copy);
+		// the schema is cached per connection, so the patched copy is opened afresh
+		const patch = new (sqlite().DatabaseSync)(copy);
+		try {
+			stripUnicase(patch);
+		} finally {
+			patch.close();
+		}
+		const db = new (sqlite().DatabaseSync)(copy, { readOnly: true });
 		try {
 			const ver = (db.prepare("select ver from col").get() as { ver?: number } | undefined)?.ver;
 			if (ver === undefined || ver < 18) {
