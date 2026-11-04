@@ -201,3 +201,9 @@ export interface DuplicateGroup {
 	/** The keeper first. */
 	cards: CardDraft[];
 }
+
+/** One canonical spelling for the whole document, with the variants it replaces (the term glossary). */
+export interface GlossaryTerm {
+	canonical: string;
+	variants: string[];
+}
