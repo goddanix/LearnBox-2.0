@@ -86,14 +86,14 @@ export const localDate = (d: Date): string => `${d.getFullYear()}-${pad2(d.getMo
 
 // ─── the course and its material ─────────────────────────────────────────────
 
-function requireCourse(id: string, deps: Pick<NotesDeps, "study">): StudyCourse {
+export function requireCourse(id: string, deps: Pick<NotesDeps, "study">): StudyCourse {
 	const course = deps.study.readCourses().find((c) => c.id === id);
 	if (!course) throw new CreateInputError("Unknown course", 404);
 	return course;
 }
 
 /** The cards jobs of a course, oldest first (D1, D2 … follow this order). */
-function jobsOf(courseId: string, deps: Pick<NotesDeps, "create">): CardsJob[] {
+export function jobsOf(courseId: string, deps: Pick<NotesDeps, "create">): CardsJob[] {
 	return deps.create
 		.list()
 		.filter((j): j is CardsJob => j.kind === "cards" && j.courseId === courseId)
@@ -180,7 +180,7 @@ export function getNotes(courseId: string, deps: NotesDeps = defaultNotesDeps())
 }
 
 /** The layout of a page: the one kept from the card run, else read from the PDF (and not kept: the card run would take a lighter one for its own). */
-async function layoutFor(job: CardsJob, page: number, deps: NotesDeps): Promise<PageLayout> {
+export async function layoutFor(job: CardsJob, page: number, deps: Pick<NotesDeps, "create" | "library" | "layouts">): Promise<PageLayout> {
 	const cached = deps.create.readLayout(job.id, page);
 	if (cached) return cached;
 	const pdf = deps.library.pdfPath(job.lectureId);

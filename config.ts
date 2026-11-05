@@ -34,6 +34,8 @@ export const PATHS = {
 	create: path.join(DATA_ROOT, "create"),
 	/** Obsidian notes per course (themen_notizen.json + the cut-out figures; src/store/notes.ts). */
 	notes: path.join(DATA_ROOT, "notes"),
+	/** The audio summary per course (script, MP3) and the voice (src/store/audio.ts). */
+	audio: path.join(DATA_ROOT, "audio"),
 	/** Debug artifacts (env-gated): data/debug/provider-events/<chatId>.jsonl
 	 * raw provider stream recordings (src/agent/provider-events.ts). */
 	debug: path.join(DATA_ROOT, "debug"),

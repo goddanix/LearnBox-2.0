@@ -18,6 +18,7 @@ export * from "./create-cards-edit.ts";
 export * from "./create-courses.ts";
 export * from "./create-notes.ts";
 export * from "./create-vault.ts";
+export * from "./create-audio.ts";
 export * from "./create-legacy.ts";
 export * from "./anki-import.ts";
 export * from "./stores.ts";

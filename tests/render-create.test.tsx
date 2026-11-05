@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { DraftCard } from "../components/create/draft-card.tsx";
 import { AddCardForm, CardEditor } from "../components/create/card-editor.tsx";
 import { CourseDetail } from "../components/create/course-detail.tsx";
+import { AudioPanel, type AudioPanelProps, CourseAudio } from "../components/create/course-audio.tsx";
 import { CourseNotes } from "../components/create/course-notes.tsx";
 import { NotePreview, noteBlocks } from "../components/create/note-preview.tsx";
 import { CoursesPanel } from "../components/create/courses-panel.tsx";
@@ -16,6 +17,7 @@ import { PagePicture } from "../components/create/page-picture.tsx";
 import { NewCardsForm } from "../components/create/new-cards-form.tsx";
 import { NewJobForm } from "../components/create/new-job-form.tsx";
 import type { LectureSource } from "../src/core/contracts.ts";
+import type { AudioView } from "../src/core/contracts/create-audio.ts";
 import type { CardDraft, CreateCourse, FrontBackCard, LegendClozeCard, OcclusionCard } from "../src/core/contracts/create-cards.ts";
 
 /**
@@ -162,6 +164,96 @@ describe("CourseNotes", () => {
 		assert.match(html, /data-testid="vault-link"/);
 		assert.match(html, /Verwandte Themen/);
 		assert.match(html, /Only notes this app wrote are changed/);
+	});
+});
+
+describe("CourseAudio", () => {
+	const noop = () => undefined;
+	const view = (extra: Partial<AudioView> = {}): AudioView => ({
+		courseId: "cardio",
+		status: "none",
+		title: "",
+		script: "",
+		file: null,
+		audioAt: "",
+		error: "",
+		audioError: "",
+		jobIds: [],
+		run: null,
+		sources: [
+			{ jobId: "crt_a", name: "01_Heart lecture", pages: 12 },
+			{ jobId: "crt_b", name: "Valves", pages: 1 },
+		],
+		keyConfigured: true,
+		voiceId: "21m00Tcm4TlvDq8ikWAM",
+		defaultVoiceId: "21m00Tcm4TlvDq8ikWAM",
+		chars: 0,
+		...extra,
+	});
+	/** The markup without React's text-node separators, so a sentence reads as one. */
+	const panel = (audio: AudioView, extra: Partial<AudioPanelProps> = {}) =>
+		renderToStaticMarkup(
+			<AudioPanel audio={audio} picked={new Set(["crt_a"])} onPick={noop} title={null} script={null} onTitle={noop} onScript={noop} error={null} onWrite={noop} onRewrite={noop} onSave={noop} onGenerate={noop} onVoiceChanged={noop} onAddKey={noop} {...extra} />,
+		).replace(/<!-- -->/g, "");
+
+	it("starts by loading", () => {
+		const html = renderToStaticMarkup(<CourseAudio course={course()} />);
+		assert.match(html, /data-testid="course-audio"/);
+		assert.match(html, /Audio summary/);
+		assert.match(html, /Loading…/);
+	});
+
+	it("before a script: says what it is, lists the PDFs with the ticked ones, and offers to write the script", () => {
+		const html = panel(view());
+		assert.match(html, /that uses ElevenLabs credit/);
+		assert.match(html, /01_Heart lecture/);
+		assert.match(html, /12 pages/);
+		assert.match(html, /1 page</);
+		assert.match(html, /<input[^>]*checked=""[^>]*\/>/, "the ticked PDF");
+		assert.match(html, /Write the script/);
+		assert.doesNotMatch(html, /audio-generate|audio-script/, "no audio before a script");
+	});
+
+	it("will not write a script from no PDF, and asks for the key without hiding the script", () => {
+		assert.match(panel(view(), { picked: new Set() }), /<button[^>]*disabled=""[^>]*data-testid="audio-write"|data-testid="audio-write"[^>]*disabled=""/);
+		assert.match(panel(view({ sources: [] })), /has no PDFs yet/);
+		assert.match(panel(view({ keyConfigured: false })), /data-testid="audio-nokey"[\s\S]*No ElevenLabs API key is saved yet/);
+		assert.doesNotMatch(panel(view({ keyConfigured: true })), /audio-nokey/);
+	});
+
+	it("shows how far a run is, and a failed script", () => {
+		const running = panel(view({ status: "running", run: { kind: "script", stage: "Reading the pages", done: 3, total: 12 } }));
+		assert.match(running, /Reading the pages — 3 of 12 pages/);
+		assert.match(running, /Writing…/);
+		assert.match(panel(view({ status: "error", error: "Claude gave no script." })), /role="alert"[^>]*>Claude gave no script\./);
+		assert.match(panel(view({ status: "error", error: "Claude gave no script." })), /Try again/);
+	});
+
+	it("a script: editable, counted, with the voice; the audio needs a saved script and a key", () => {
+		const draft = view({ status: "draft", title: "The heart", script: "First the atria fill. Then the ventricles contract.", chars: 49, jobIds: ["crt_a"] });
+		const html = panel(draft);
+		assert.match(html, /data-testid="audio-script"/);
+		assert.match(html, /The heart/);
+		assert.match(html, /8 words · 51 characters/);
+		assert.match(html, /Uses ElevenLabs credit — 49 characters/);
+		assert.match(html, /\(the default\)/);
+		assert.match(html, /Create audio/);
+		assert.doesNotMatch(html, /<button[^>]*disabled=""[^>]*data-testid="audio-generate"/);
+		assert.doesNotMatch(html, /audio-player/, "nothing to play yet");
+		assert.match(panel(draft, { script: "Changed." }), /data-testid="audio-generate"[^>]*disabled=""|<button[^>]*disabled=""[^>]*data-testid="audio-generate"/, "save first");
+		assert.match(panel({ ...draft, keyConfigured: false }), /<button[^>]*disabled=""[^>]*data-testid="audio-generate"|data-testid="audio-generate"[^>]*disabled=""/);
+	});
+
+	it("an audio: a player that reloads for a new file, a download, and a failed attempt shown", () => {
+		const done = view({ status: "draft", title: "The heart", script: "One.", chars: 4, file: "summary.mp3", audioAt: "2026-11-05T10:00:00.000Z" });
+		const html = panel(done);
+		assert.match(html, /<audio[^>]*src="\/api\/create\/courses\/cardio\/audio\/file\?v=2026-11-05T10%3A00%3A00\.000Z"/);
+		assert.match(html, /Download the MP3/);
+		assert.match(html, /Create the audio again/);
+		assert.match(panel({ ...done, audioError: "ElevenLabs rejects the API key (401)" }), /role="alert"[^>]*>ElevenLabs rejects the API key \(401\)/);
+		const making = panel({ ...done, run: { kind: "audio", stage: "Creating the audio", done: 1, total: 3 } });
+		assert.match(making, /Creating the audio — piece 2 of 3/);
+		assert.match(panel({ ...done, run: { kind: "audio", stage: "Creating the audio", done: 0, total: 1 } }), /this can take a minute/);
 	});
 });
 
