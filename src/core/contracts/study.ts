@@ -72,6 +72,9 @@ export interface StudyCard {
 	suspended?: boolean;
 	/** Study day "YYYY-MM-DD" on which a buried card is shown again (hidden before it). */
 	buriedUntil?: string;
+	/** When the learner last suspended, buried or edited the card. A change made on the phone is taken in on the Mac
+	 *  only when it is newer than this (Slice 10e: the newer of two changes wins). Absent: never changed that way. */
+	editedAt?: string;
 }
 
 /** One answered review — the ledger line. */

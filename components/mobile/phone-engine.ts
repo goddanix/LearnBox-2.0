@@ -8,8 +8,8 @@
  * are read from storage and the same card is rendered again (same step, nothing recorded twice).
  */
 
-import { createMemoryStudyStore, studyAnswer, studyCourses, studyNext, studyUndo, StudyInputError } from "@/src/core";
-import type { StudyChange, StudyNextResult, StudyReview } from "@/src/core";
+import { createMemoryStudyStore, studyAnswer, studyCardAction, studyCourses, studyNext, studyUndo, StudyInputError } from "@/src/core";
+import type { PhoneCardOp, StudyCard, StudyChange, StudyNextResult, StudyReview } from "@/src/core";
 import type { PhoneDb, PhoneMeta } from "./phone-db";
 import { PhoneApiError } from "./phone-http";
 import type { PhoneStudyApi } from "./study-api";
@@ -21,6 +21,8 @@ export interface PhoneEngine {
 	unsent(): number;
 	/** Those answers themselves — at hand at once, so a backup can be handed over inside the tap that asks for it. */
 	unsentReviews(): StudyReview[];
+	/** Card changes (pause, bury, edit) made on this phone that the Mac does not have yet, oldest first. */
+	unsentOps(): PhoneCardOp[];
 }
 
 /** `data:` URI for a media file; chunked, because one spread of a big array overflows the call stack. */
@@ -40,11 +42,14 @@ export async function startPhoneEngine(db: PhoneDb, now: () => Date = () => new 
 	if (!snap) return null;
 
 	const unsentLines = snap.reviews.filter((r) => !r.sent).map((r) => r.review);
+	const unsentChanges = snap.ops.filter((o) => !o.sent).map((o) => o.op);
 	const pending: StudyReview[] = [];
+	const pendingCards: StudyCard[] = [];
 	const store = createMemoryStudyStore(
 		{ courses: snap.courses, cards: snap.cards, reviews: snap.reviews.map((r) => r.review) },
 		(change: StudyChange) => {
 			if (change.kind === "reviews") pending.push(...change.reviews);
+			else if (change.kind === "cards") pendingCards.push(...change.cards);
 		},
 	);
 
@@ -108,6 +113,22 @@ export async function startPhoneEngine(db: PhoneDb, now: () => Date = () => new 
 		next: (courseId, step, openCardId) => run(courseId, () => studyNext(courseId, step, now(), deps, openCardId)),
 		answer: (input) => run(input.courseId, () => studyAnswer(input, now(), deps)),
 		undo: (input) => run(input.courseId, () => studyUndo(input, now(), deps)),
+		cardAction: async (input) => {
+			// one moment for the change and for the stamp it leaves on the cards: the Mac compares the two
+			const at = now();
+			const out = await run(input.courseId, () => studyCardAction(input, at, deps));
+			const changed = pendingCards.splice(0);
+			if (changed.length > 0) {
+				const op: PhoneCardOp = { cardId: input.cardId, action: input.action, at: at.toISOString(), ...(input.action === "edit" ? { fields: input.fields } : {}) };
+				try {
+					await db.addCardChange(op, changed);
+					unsentChanges.push(op);
+				} catch {
+					throw new PhoneApiError("Could not save your change on this phone.", "server");
+				}
+			}
+			return out;
+		},
 	};
-	return { api, meta: snap.meta, unsent: () => unsentLines.length, unsentReviews: () => [...unsentLines] };
+	return { api, meta: snap.meta, unsent: () => unsentLines.length, unsentReviews: () => [...unsentLines], unsentOps: () => [...unsentChanges] };
 }

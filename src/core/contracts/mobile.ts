@@ -119,7 +119,22 @@ export interface PhoneDeck {
 export const PHONE_BACKUP_SCHEMA = 1;
 export const PHONE_BACKUP_KIND = "learnbox-phone-backup";
 
-/** The file the phone saves: the answers the Mac does not have yet. Importable on the phone and on the Mac. */
+/** What the learner can do to a card on the phone besides answering it (same names as the Mac's card actions). */
+export type PhoneCardAction = "suspend" | "unsuspend" | "bury" | "unbury" | "edit";
+
+/**
+ * One change made to a card on the phone (Slice 10e), kept until the Mac has it. `at` is the phone's clock when the
+ * learner made it: the Mac takes it in only if the card was not changed there after that moment (the newer wins).
+ */
+export interface PhoneCardOp {
+	cardId: string;
+	action: PhoneCardAction;
+	at: string;
+	/** For `edit`: the fields that changed, by name, with their new text. */
+	fields?: Record<string, string>;
+}
+
+/** The file the phone saves: the answers and card changes the Mac does not have yet. Importable on the phone and on the Mac. */
 export interface PhoneBackup {
 	v: typeof PHONE_BACKUP_SCHEMA;
 	kind: typeof PHONE_BACKUP_KIND;
@@ -127,6 +142,22 @@ export interface PhoneBackup {
 	/** The phone's name, for the learner's own eyes. */
 	device?: string;
 	reviews: StudyReview[];
+	/** Card changes (pause, bury, edit) not yet on the Mac. Absent in files from before Slice 10e. */
+	ops?: PhoneCardOp[];
+}
+
+/** What the Mac did with card changes it was sent. */
+export interface PhoneCardChangesResult {
+	/** Changes made to the Mac's cards now. */
+	applied: number;
+	/** Changes the Mac had already taken in (same change, sent again). */
+	known: number;
+	/** Changes left out because the card was changed on the Mac after the learner made them on the phone. */
+	newerOnMac: number;
+	/** Changes for cards that no longer exist. */
+	unknownCards: number;
+	/** Changes that were not valid (not a change, a field the card does not have, …). */
+	rejected: number;
 }
 
 /** What the Mac did with review lines it was sent (POST /api/phone/sync) or read from a backup file. */
@@ -141,4 +172,6 @@ export interface PhoneSyncResult {
 	rejected: number;
 	/** Lines in the ledger now: the phone asks for the deck from here next time. */
 	reviewsTotal: number;
+	/** What happened to the card changes that came with them (Slice 10e). */
+	cardChanges: PhoneCardChangesResult;
 }

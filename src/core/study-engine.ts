@@ -204,47 +204,44 @@ const MAX_FIELD_CHARS = 200_000;
 
 export type StudyCardAction = "suspend" | "unsuspend" | "bury" | "unbury" | "edit";
 
+/** What a card change needs: the card, what to do, and for `edit` the fields to rewrite. `courseId` narrows the lookup. */
+export interface StudyCardChange {
+	cardId: string;
+	courseId?: string;
+	action: StudyCardAction;
+	fields?: Record<string, string>;
+}
+
 /**
- * Change a card outside of answering it. suspend/bury (and their takebacks)
- * touch that card only — the step stays; `edit` rewrites the named fields on
- * the card and on every other card of the same Anki note.
+ * The change itself, without any screen state: the cards are rewritten in the store and stamped `editedAt: now`.
+ * suspend/bury (and their takebacks) touch that card only; `edit` rewrites the named fields on the card and on every
+ * other card of the same Anki note. The Mac runs a queued change from the phone through this with the phone's clock
+ * as `now`.
  */
-export function studyCardAction(
-	input: {
-		courseId: string;
-		cardId: string;
-		action: StudyCardAction;
-		fields?: Record<string, string>;
-		step?: number;
-	},
-	now: Date,
-	deps: StudyEngineDeps,
-): StudyNextResult {
-	const { courseId, cardId, action } = input;
-	const step = cleanStep(input.step);
+export function applyStudyCardChange(input: StudyCardChange, now: Date, deps: StudyEngineDeps): void {
+	const { cardId, action } = input;
 	const cards = deps.store.readCards();
-	const card = cards.find((c) => c.id === cardId && c.courseId === courseId);
+	const card = cards.find((c) => c.id === cardId && (input.courseId === undefined || c.courseId === input.courseId));
 	if (!card) throw new StudyInputError("Unknown card", 404);
+	const editedAt = now.toISOString();
 
 	switch (action) {
-		case "suspend": {
-			deps.store.upsertCard({ ...card, suspended: true });
-			return nextResult(courseId, step, now, deps);
-		}
+		case "suspend":
+			deps.store.upsertCard({ ...card, suspended: true, editedAt });
+			return;
 		case "unsuspend": {
 			const { suspended: _drop, ...rest } = card;
-			deps.store.upsertCard(rest);
-			return nextResult(courseId, step, now, deps, cardId);
+			deps.store.upsertCard({ ...rest, editedAt });
+			return;
 		}
-		case "bury": {
+		case "bury":
 			// hidden for the rest of today's study day
-			deps.store.upsertCard({ ...card, buriedUntil: addDays(clockAt(now).today, 1) });
-			return nextResult(courseId, step, now, deps);
-		}
+			deps.store.upsertCard({ ...card, buriedUntil: addDays(clockAt(now).today, 1), editedAt });
+			return;
 		case "unbury": {
 			const { buriedUntil: _drop, ...rest } = card;
-			deps.store.upsertCard(rest);
-			return nextResult(courseId, step, now, deps, cardId);
+			deps.store.upsertCard({ ...rest, editedAt });
+			return;
 		}
 		case "edit": {
 			const edits = input.fields;
@@ -268,12 +265,31 @@ export function studyCardAction(
 						touched = true;
 					}
 				}
-				return touched ? [{ ...c, fields }] : [];
+				return touched ? [{ ...c, fields, editedAt }] : [];
 			});
 			deps.store.upsertCards(changed);
-			return nextResult(courseId, step, now, deps, cardId);
+			return;
 		}
 		default:
 			throw new StudyInputError("Unknown action", 400);
 	}
+}
+
+/** Change a card outside of answering it, and say what to show next. */
+export function studyCardAction(
+	input: {
+		courseId: string;
+		cardId: string;
+		action: StudyCardAction;
+		fields?: Record<string, string>;
+		step?: number;
+	},
+	now: Date,
+	deps: StudyEngineDeps,
+): StudyNextResult {
+	const { courseId, cardId, action } = input;
+	const step = cleanStep(input.step);
+	applyStudyCardChange({ cardId, courseId, action, fields: input.fields }, now, deps);
+	// a suspended or buried card is gone from the queue; a takeback or an edit keeps the card on screen
+	return action === "suspend" || action === "bury" ? nextResult(courseId, step, now, deps) : nextResult(courseId, step, now, deps, cardId);
 }

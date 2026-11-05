@@ -1,14 +1,15 @@
 /**
  * The phone's own storage (Learnbox 2.0, Slice 10c): its copy of the courses and cards, every review it has seen (the
- * Mac's, and the ones given on the phone, marked until the Mac has them), and the media files the cards show. One
- * seam (`PhoneDb`), two implementations: IndexedDB for the phone, a plain in-memory one for tests.
+ * Mac's, and the ones given on the phone, marked until the Mac has them), the card changes made on the phone (pause,
+ * bury, edit — likewise marked), and the media files the cards show. One seam (`PhoneDb`), two implementations:
+ * IndexedDB for the phone, a plain in-memory one for tests.
  *
  * Nothing here knows about studying; the engine (phone-engine.ts) loads a snapshot into memory and writes back what
  * changes.
  */
 
-import { newReviews, reviewKey } from "@/src/core";
-import type { StudyCard, StudyCourse, StudyReview } from "@/src/core";
+import { newOps, newReviews, opKey, reviewKey } from "@/src/core";
+import type { PhoneCardOp, StudyCard, StudyCourse, StudyReview } from "@/src/core";
 
 /** What the phone remembers about its copy. */
 export interface PhoneMeta {
@@ -28,11 +29,18 @@ export interface ReviewRow {
 	sent: boolean;
 }
 
+/** One card change the phone holds: `sent` is false until the Mac has taken it in. */
+export interface OpRow {
+	op: PhoneCardOp;
+	sent: boolean;
+}
+
 export interface PhoneSnapshot {
 	meta: PhoneMeta;
 	courses: StudyCourse[];
 	cards: StudyCard[];
 	reviews: ReviewRow[];
+	ops: OpRow[];
 }
 
 export interface PhoneMediaFile {
@@ -44,7 +52,7 @@ export interface PhoneMediaFile {
 export interface PhoneDb {
 	/** Everything but the media, or null when no deck has been taken in yet. */
 	load(): Promise<PhoneSnapshot | null>;
-	/** Replace the courses and cards, add the Mac's new review lines, set the meta — all or nothing. */
+	/** Replace the courses and cards, add the Mac's new review lines, set the meta — all or nothing. Card changes the Mac has are let go. */
 	applyDeck(input: { meta: PhoneMeta; courses: readonly StudyCourse[]; cards: readonly StudyCard[]; macReviews: readonly StudyReview[] }): Promise<void>;
 	/** Answers given on the phone, kept until the Mac has them. */
 	addReviews(reviews: readonly StudyReview[]): Promise<void>;
@@ -54,6 +62,14 @@ export interface PhoneDb {
 	markSent(reviews: readonly StudyReview[]): Promise<void>;
 	/** Answers from a backup file: the ones this phone does not hold yet are kept as not-yet-sent. Says how many were new. */
 	importReviews(reviews: readonly StudyReview[]): Promise<number>;
+	/** A card change made on the phone: the cards it rewrote and the change itself, kept together — all or nothing. */
+	addCardChange(op: PhoneCardOp, cards: readonly StudyCard[]): Promise<void>;
+	/** The card changes the Mac does not have yet, oldest first. */
+	unsentOps(): Promise<PhoneCardOp[]>;
+	/** The Mac has taken these in (matched by what the change is, not by position). */
+	markOpsSent(ops: readonly PhoneCardOp[]): Promise<void>;
+	/** Card changes from a backup file: the ones this phone does not hold yet are kept as not-yet-sent. Says how many were new. */
+	importOps(ops: readonly PhoneCardOp[]): Promise<number>;
 	mediaNames(): Promise<string[]>;
 	putMedia(file: PhoneMediaFile): Promise<void>;
 	getMedia(names: readonly string[]): Promise<Map<string, PhoneMediaFile>>;
@@ -68,14 +84,16 @@ export function createMemoryPhoneDb(): PhoneDb {
 	let courses: StudyCourse[] = [];
 	let cards: StudyCard[] = [];
 	let reviews: ReviewRow[] = [];
+	let ops: OpRow[] = [];
 	const media = new Map<string, PhoneMediaFile>();
 	return {
-		load: async () => (meta ? { meta, courses: [...courses], cards: [...cards], reviews: [...reviews] } : null),
+		load: async () => (meta ? { meta, courses: [...courses], cards: [...cards], reviews: [...reviews], ops: [...ops] } : null),
 		applyDeck: async (input) => {
 			meta = input.meta;
 			courses = [...input.courses];
 			cards = [...input.cards];
 			reviews.push(...input.macReviews.map((review): ReviewRow => ({ review, src: "mac", sent: true })));
+			ops = ops.filter((o) => !o.sent);
 		},
 		addReviews: async (batch) => {
 			reviews.push(...batch.map((review): ReviewRow => ({ review, src: "phone", sent: false })));
@@ -90,6 +108,21 @@ export function createMemoryPhoneDb(): PhoneDb {
 			reviews.push(...fresh.map((review): ReviewRow => ({ review, src: "phone", sent: false })));
 			return fresh.length;
 		},
+		addCardChange: async (op, changed) => {
+			const byId = new Map(changed.map((c) => [c.id, c]));
+			cards = cards.map((c) => byId.get(c.id) ?? c);
+			ops.push({ op, sent: false });
+		},
+		unsentOps: async () => ops.filter((o) => !o.sent).map((o) => o.op),
+		markOpsSent: async (batch) => {
+			const keys = new Set(batch.map(opKey));
+			ops = ops.map((o) => (!o.sent && keys.has(opKey(o.op)) ? { ...o, sent: true } : o));
+		},
+		importOps: async (batch) => {
+			const fresh = newOps(ops.map((o) => o.op), batch);
+			ops.push(...fresh.map((op): OpRow => ({ op, sent: false })));
+			return fresh.length;
+		},
 		mediaNames: async () => [...media.keys()],
 		putMedia: async (file) => void media.set(file.name, file),
 		getMedia: async (names) => new Map(names.flatMap((n) => (media.has(n) ? [[n, media.get(n)!] as const] : []))),
@@ -101,7 +134,7 @@ export function createMemoryPhoneDb(): PhoneDb {
 // ─── IndexedDB (the phone) ───────────────────────────────────────────────────
 
 const DB_NAME = "learnbox-phone";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const META_KEY = "meta";
 
 const done = (tx: IDBTransaction): Promise<void> =>
@@ -119,13 +152,17 @@ const result = <T>(request: IDBRequest<T>): Promise<T> =>
 export function openIndexedPhoneDb(factory: IDBFactory = indexedDB, name: string = DB_NAME): Promise<PhoneDb> {
 	return new Promise((resolve, reject) => {
 		const open = factory.open(name, DB_VERSION);
-		open.onupgradeneeded = () => {
+		open.onupgradeneeded = (event) => {
 			const db = open.result;
-			db.createObjectStore("meta");
-			db.createObjectStore("courses", { keyPath: "id" });
-			db.createObjectStore("cards", { keyPath: "id" });
-			db.createObjectStore("reviews", { autoIncrement: true });
-			db.createObjectStore("media", { keyPath: "name" });
+			if (event.oldVersion < 1) {
+				db.createObjectStore("meta");
+				db.createObjectStore("courses", { keyPath: "id" });
+				db.createObjectStore("cards", { keyPath: "id" });
+				db.createObjectStore("reviews", { autoIncrement: true });
+				db.createObjectStore("media", { keyPath: "name" });
+			}
+			// Slice 10e: the card changes made on the phone; a phone that already holds a deck keeps everything it has
+			if (event.oldVersion < 2) db.createObjectStore("ops", { autoIncrement: true });
 		};
 		open.onerror = () => reject(open.error ?? new Error("This browser cannot keep cards on the phone."));
 		open.onblocked = () => reject(new Error("The phone's storage is busy; close other Learnbox windows and try again."));
@@ -136,18 +173,26 @@ export function openIndexedPhoneDb(factory: IDBFactory = indexedDB, name: string
 function wrap(db: IDBDatabase): PhoneDb {
 	return {
 		async load() {
-			const tx = db.transaction(["meta", "courses", "cards", "reviews"], "readonly");
-			const [meta, courses, cards, reviews] = await Promise.all([
+			const tx = db.transaction(["meta", "courses", "cards", "reviews", "ops"], "readonly");
+			const [meta, courses, cards, reviews, ops] = await Promise.all([
 				result(tx.objectStore("meta").get(META_KEY) as IDBRequest<PhoneMeta | undefined>),
 				result(tx.objectStore("courses").getAll() as IDBRequest<StudyCourse[]>),
 				result(tx.objectStore("cards").getAll() as IDBRequest<StudyCard[]>),
 				result(tx.objectStore("reviews").getAll() as IDBRequest<ReviewRow[]>),
+				result(tx.objectStore("ops").getAll() as IDBRequest<OpRow[]>),
 			]);
-			return meta ? { meta, courses, cards, reviews } : null;
+			return meta ? { meta, courses, cards, reviews, ops } : null;
 		},
 		async applyDeck({ meta, courses, cards, macReviews }) {
-			const tx = db.transaction(["meta", "courses", "cards", "reviews"], "readwrite");
+			const tx = db.transaction(["meta", "courses", "cards", "reviews", "ops"], "readwrite");
 			const done_ = done(tx);
+			// the Mac has the changes that were sent; what it did with them is in the deck it just gave
+			tx.objectStore("ops").openCursor().onsuccess = (event) => {
+				const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;
+				if (!cursor) return;
+				if ((cursor.value as OpRow).sent) cursor.delete();
+				cursor.continue();
+			};
 			tx.objectStore("courses").clear();
 			tx.objectStore("cards").clear();
 			for (const c of courses) tx.objectStore("courses").put(c);
@@ -189,6 +234,41 @@ function wrap(db: IDBDatabase): PhoneDb {
 			const tx = db.transaction("reviews", "readwrite");
 			const done_ = done(tx);
 			for (const review of fresh) tx.objectStore("reviews").add({ review, src: "phone", sent: false } satisfies ReviewRow);
+			await done_;
+			return fresh.length;
+		},
+		async addCardChange(op, changed) {
+			const tx = db.transaction(["cards", "ops"], "readwrite");
+			const done_ = done(tx);
+			for (const card of changed) tx.objectStore("cards").put(card);
+			tx.objectStore("ops").add({ op, sent: false } satisfies OpRow);
+			await done_;
+		},
+		async unsentOps() {
+			const rows = (await result(db.transaction("ops", "readonly").objectStore("ops").getAll())) as OpRow[];
+			return rows.filter((o) => !o.sent).map((o) => o.op);
+		},
+		async markOpsSent(batch) {
+			if (batch.length === 0) return;
+			const keys = new Set(batch.map(opKey));
+			const tx = db.transaction("ops", "readwrite");
+			const done_ = done(tx);
+			tx.objectStore("ops").openCursor().onsuccess = (event) => {
+				const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;
+				if (!cursor) return;
+				const row = cursor.value as OpRow;
+				if (!row.sent && keys.has(opKey(row.op))) cursor.update({ ...row, sent: true } satisfies OpRow);
+				cursor.continue();
+			};
+			await done_;
+		},
+		async importOps(batch) {
+			const rows = (await result(db.transaction("ops", "readonly").objectStore("ops").getAll())) as OpRow[];
+			const fresh = newOps(rows.map((o) => o.op), batch);
+			if (fresh.length === 0) return 0;
+			const tx = db.transaction("ops", "readwrite");
+			const done_ = done(tx);
+			for (const op of fresh) tx.objectStore("ops").add({ op, sent: false } satisfies OpRow);
 			await done_;
 			return fresh.length;
 		},

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { StudyCourseSummary } from "@/src/core";
-import { buildPhoneBackup } from "@/src/core";
+import { buildPhoneBackup, cardChangesText } from "@/src/core";
 import { keepAppForOffline } from "./offline-shell";
 import { getPhoneToken, phoneFetch } from "./phone-auth";
 import { readBackupFile, saveBackupFile } from "./phone-backup";
@@ -36,6 +36,8 @@ const writeHash = (courseId: string | null) => {
 export function updateSummary(r: UpdateResult): string {
 	const parts = [`${r.cards} card${r.cards === 1 ? "" : "s"}`];
 	if (r.sent > 0) parts.push(`${r.sent} answer${r.sent === 1 ? "" : "s"} sent to the Mac`);
+	if (r.sentOps > 0) parts.push(`${cardChangesText(r.sentOps)} sent to the Mac`);
+	if (r.newerOnMac > 0) parts.push(`${cardChangesText(r.newerOnMac)} not kept: the card was changed on the Mac since`);
 	if (r.reviews > 0) parts.push(`${r.reviews} new answer${r.reviews === 1 ? "" : "s"} from the Mac`);
 	if (r.media > 0) parts.push(`${r.media} picture${r.media === 1 ? "" : "s"}`);
 	const failed = r.mediaFailed > 0 ? ` ${r.mediaFailed} picture${r.mediaFailed === 1 ? "" : "s"} did not come; update again to retry.` : "";
@@ -148,7 +150,7 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 		const engine = sourceRef.current?.engine;
 		if (!engine) return;
 		setNotice(null);
-		const backup = buildPhoneBackup(engine.unsentReviews(), new Date(), deviceName ?? undefined);
+		const backup = buildPhoneBackup(engine.unsentReviews(), new Date(), deviceName ?? undefined, engine.unsentOps());
 		void saveBackupFile(backup).then(
 			(how) => setNotice(how === "shared" ? "Backup handed over." : how === "downloaded" ? "Backup file downloaded." : null),
 			(e: unknown) => setNotice(`Could not save the backup: ${e instanceof Error ? e.message : String(e)}`),
@@ -166,11 +168,17 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 			return;
 		}
 		try {
-			const { added, source: next } = await current.restore(read.backup.reviews);
+			const { added, addedOps, source: next } = await current.restore(read.backup);
 			sourceRef.current = next;
 			setSource(next);
 			const total = read.backup.reviews.length;
-			setNotice(`Backup read: ${added} new answer${added === 1 ? "" : "s"}${total - added > 0 ? `, ${total - added} already here` : ""}${read.rejected > 0 ? `, ${read.rejected} unreadable skipped` : ""}.`);
+			const totalOps = read.backup.ops?.length ?? 0;
+			const known = total - added + (totalOps - addedOps);
+			const parts = [`${added} new answer${added === 1 ? "" : "s"}`];
+			if (totalOps > 0) parts.push(`${cardChangesText(addedOps)} to send`);
+			if (known > 0) parts.push(`${known} already here`);
+			if (read.rejected > 0) parts.push(`${read.rejected} unreadable skipped`);
+			setNotice(`Backup read: ${parts.join(", ")}.`);
 			await loadCourses();
 		} catch (e) {
 			setNotice(`Could not read the backup: ${e instanceof Error ? e.message : String(e)}`);
@@ -192,6 +200,7 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 				course={course}
 				onError={onApiError}
 				unsent={engine.unsent}
+				unsentOps={() => engine.unsentOps().length}
 				onBackup={saveBackup}
 				notice={notice}
 				onExit={() => {
@@ -210,6 +219,7 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 			deviceName={deviceName}
 			syncedAt={engine.meta.syncedAt}
 			unsent={engine.unsent()}
+			unsentOps={engine.unsentOps().length}
 			updating={updating}
 			updated={updated}
 			notice={notice}

@@ -1,15 +1,18 @@
 /**
- * Answers travelling from the phone back to the Mac (Learnbox 2.0, Slice 10d) — by the update (POST /api/phone/sync)
- * or by a backup file the learner carries over. Pure: the Mac side (server/phone-sync.ts) supplies the ledger.
+ * Answers and card changes travelling from the phone back to the Mac (Learnbox 2.0, Slices 10d/10e) — by the update
+ * (POST /api/phone/sync) or by a backup file the learner carries over. Pure: the Mac side (server/phone-sync.ts)
+ * supplies the ledger and the cards.
  *
- * A review line is the same line wherever a copy of it turns up (core/phone-deck.ts `reviewKey`), so every way in
- * is safe to repeat: the second time, nothing is added.
+ * A review line is the same line wherever a copy of it turns up (core/phone-deck.ts `reviewKey`), and a card change
+ * is recognised by the stamp it left (core/phone-ops.ts), so every way in is safe to repeat: the second time,
+ * nothing is added.
  */
 
 import { PHONE_BACKUP_KIND, PHONE_BACKUP_SCHEMA } from "./contracts/mobile.ts";
-import type { PhoneBackup, PhoneSyncResult } from "./contracts/mobile.ts";
+import type { PhoneBackup, PhoneCardOp, PhoneSyncResult } from "./contracts/mobile.ts";
 import type { StudyGrade, StudyReview } from "./contracts/study.ts";
 import { newReviews } from "./phone-deck.ts";
+import { acceptPhoneOps, cardChangesText, cleanCardOps } from "./phone-ops.ts";
 import type { StudyStore } from "./ports.ts";
 
 /** At most this many review lines in one upload (a phone's unsent answers are far fewer; this is a stop for junk). */
@@ -46,11 +49,14 @@ export function cleanReviewLines(raw: unknown): { reviews: StudyReview[]; reject
 	return { reviews, rejected };
 }
 
+/** What the Mac did with the review lines of a sync: `PhoneSyncResult` without the card changes. */
+export type PhoneReviewsResult = Omit<PhoneSyncResult, "cardChanges">;
+
 /**
  * Take review lines into the Mac's ledger: only the ones it does not hold yet, and only for cards that exist (an
  * answer for a card deleted in the meantime has nothing to schedule). One write. Null: `raw` is not a list of lines.
  */
-export function acceptPhoneReviews(store: StudyStore, raw: unknown): PhoneSyncResult | null {
+export function acceptPhoneReviews(store: StudyStore, raw: unknown): PhoneReviewsResult | null {
 	const cleaned = cleanReviewLines(raw);
 	if (!cleaned) return null;
 	const fresh = newReviews(store.readReviews(), cleaned.reviews);
@@ -66,11 +72,32 @@ export function acceptPhoneReviews(store: StudyStore, raw: unknown): PhoneSyncRe
 	};
 }
 
+/**
+ * A whole upload: the answers and the card changes. Either list may be left out, not both; a list that is there but is
+ * not a list is no upload at all (null). The card changes go in after the answers.
+ */
+export function acceptPhoneChanges(store: StudyStore, body: { reviews?: unknown; ops?: unknown }): PhoneSyncResult | null {
+	if (body.reviews === undefined && body.ops === undefined) return null;
+	// both lists are checked before anything is written: a bad upload changes nothing
+	if (!cleanReviewLines(body.reviews ?? []) || !cleanCardOps(body.ops ?? [])) return null;
+	const reviews = acceptPhoneReviews(store, body.reviews ?? []);
+	const cardChanges = acceptPhoneOps(store, body.ops ?? []);
+	if (!reviews || !cardChanges) return null;
+	return { ...reviews, cardChanges };
+}
+
 // ─── the backup file ─────────────────────────────────────────────────────────
 
-/** What the learner saves on the phone: the answers the Mac does not have yet. No cards, no pictures — it stays small. */
-export function buildPhoneBackup(reviews: readonly StudyReview[], now: Date, device?: string): PhoneBackup {
-	return { v: PHONE_BACKUP_SCHEMA, kind: PHONE_BACKUP_KIND, createdAt: now.toISOString(), ...(device ? { device } : {}), reviews: [...reviews] };
+/** What the learner saves on the phone: the answers and card changes the Mac does not have yet. No cards, no pictures — it stays small. */
+export function buildPhoneBackup(reviews: readonly StudyReview[], now: Date, device?: string, ops: readonly PhoneCardOp[] = []): PhoneBackup {
+	return {
+		v: PHONE_BACKUP_SCHEMA,
+		kind: PHONE_BACKUP_KIND,
+		createdAt: now.toISOString(),
+		...(device ? { device } : {}),
+		reviews: [...reviews],
+		...(ops.length > 0 ? { ops: [...ops] } : {}),
+	};
 }
 
 /** learnbox-backup-2026-11-05-1952.json (the phone's local time) */
@@ -79,13 +106,26 @@ export function backupFileName(now: Date): string {
 	return `learnbox-backup-${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}.json`;
 }
 
-/** A backup file read back; anything that is not one of ours is null. Lines that are not review lines are counted. */
+/** A backup file read back; anything that is not one of ours is null. Entries that are not review lines or card changes are counted. */
 export function readPhoneBackup(raw: unknown): { backup: PhoneBackup; rejected: number } | null {
 	if (!isRecord(raw) || raw.v !== PHONE_BACKUP_SCHEMA || raw.kind !== PHONE_BACKUP_KIND || typeof raw.createdAt !== "string") return null;
 	const cleaned = cleanReviewLines(raw.reviews);
 	if (!cleaned) return null;
+	// files from before Slice 10e have no card changes
+	const ops = cleanCardOps(raw.ops ?? []);
+	if (!ops) return null;
 	const device = typeof raw.device === "string" && raw.device.length <= 80 ? raw.device : undefined;
-	return { backup: { v: PHONE_BACKUP_SCHEMA, kind: PHONE_BACKUP_KIND, createdAt: raw.createdAt, ...(device ? { device } : {}), reviews: cleaned.reviews }, rejected: cleaned.rejected };
+	return {
+		backup: {
+			v: PHONE_BACKUP_SCHEMA,
+			kind: PHONE_BACKUP_KIND,
+			createdAt: raw.createdAt,
+			...(device ? { device } : {}),
+			reviews: cleaned.reviews,
+			...(ops.ops.length > 0 ? { ops: ops.ops } : {}),
+		},
+		rejected: cleaned.rejected + ops.rejected,
+	};
 }
 
 /** What a sync or an imported backup did, in a sentence. */
@@ -94,5 +134,11 @@ export function syncSummary(r: PhoneSyncResult): string {
 	if (r.known > 0) parts.push(`${r.known} already there`);
 	if (r.unknownCards > 0) parts.push(`${r.unknownCards} for cards that no longer exist skipped`);
 	if (r.rejected > 0) parts.push(`${r.rejected} unreadable line${r.rejected === 1 ? "" : "s"} skipped`);
+	const c = r.cardChanges;
+	if (c.applied > 0) parts.push(`${cardChangesText(c.applied)} taken in`);
+	if (c.known > 0) parts.push(`${cardChangesText(c.known)} already there`);
+	if (c.newerOnMac > 0) parts.push(`${cardChangesText(c.newerOnMac)} left out because the card was changed on the Mac since`);
+	if (c.unknownCards > 0) parts.push(`${cardChangesText(c.unknownCards)} for cards that no longer exist skipped`);
+	if (c.rejected > 0) parts.push(`${cardChangesText(c.rejected)} could not be used`);
 	return `${parts.join(", ")}.`;
 }

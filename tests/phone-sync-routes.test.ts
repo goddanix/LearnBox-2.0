@@ -41,7 +41,7 @@ describe("POST /api/phone/sync", () => {
 		const body = { reviews: [line("c1", "2026-11-05T09:00:00.000Z"), line("c2", "2026-11-05T09:01:00.000Z", 2), line("gone", "2026-11-05T09:02:00.000Z")] };
 		const first = await sync.POST(post("/api/phone/sync", body));
 		assert.equal(first.status, 200);
-		assert.deepEqual(await first.json(), { added: 2, known: 0, unknownCards: 1, rejected: 0, reviewsTotal: 2 });
+		assert.deepEqual(await first.json(), { added: 2, known: 0, unknownCards: 1, rejected: 0, reviewsTotal: 2, cardChanges: { applied: 0, known: 0, newerOnMac: 0, unknownCards: 0, rejected: 0 } });
 		const again = await (await sync.POST(post("/api/phone/sync", body))).json();
 		assert.equal(again.added, 0);
 		assert.equal(again.known, 2);
@@ -54,6 +54,42 @@ describe("POST /api/phone/sync", () => {
 			assert.equal(res.status, 400, JSON.stringify(bad));
 			assert.match((await res.json()).error, /answers|JSON/i);
 		}
+	});
+});
+
+describe("card changes through the routes (Slice 10e)", () => {
+	const op = (cardId: string, action: string, at: string, fields?: Record<string, string>) => ({ cardId, action, at, ...(fields ? { fields } : {}) });
+	const cardNow = async (id: string) => (await import("../src/store/study.ts")).studyStore.readCards().find((c) => c.id === id)!;
+
+	it("changes the Mac's cards once, and says so when the same changes come again", async () => {
+		const body = { ops: [op("c1", "suspend", "2026-11-05T09:00:00.000Z"), op("c2", "edit", "2026-11-05T09:01:00.000Z", { Front: "Edited on the phone" }), op("gone", "bury", "2026-11-05T09:02:00.000Z")] };
+		const first = await (await sync.POST(post("/api/phone/sync", body))).json();
+		assert.deepEqual(first.cardChanges, { applied: 2, known: 0, newerOnMac: 0, unknownCards: 1, rejected: 0 });
+		assert.equal((await cardNow("c1")).suspended, true);
+		assert.equal((await cardNow("c2")).fields.Front, "Edited on the phone");
+		const again = await (await sync.POST(post("/api/phone/sync", body))).json();
+		assert.deepEqual(again.cardChanges, { applied: 0, known: 2, newerOnMac: 0, unknownCards: 1, rejected: 0 });
+	});
+
+	it("leaves a change out when the Mac's card was changed after it was made", async () => {
+		const res = await (await sync.POST(post("/api/phone/sync", { ops: [op("c2", "edit", "2026-11-05T08:00:00.000Z", { Front: "Stale" })] }))).json();
+		assert.equal(res.cardChanges.newerOnMac, 1);
+		assert.equal((await cardNow("c2")).fields.Front, "Edited on the phone");
+	});
+
+	it("answers 400 and changes nothing when the answers are fine but the card changes are not a list", async () => {
+		const before = reviews();
+		const res = await sync.POST(post("/api/phone/sync", { reviews: [line("c1", "2026-11-05T12:00:00.000Z")], ops: "no" }));
+		assert.equal(res.status, 400);
+		assert.equal(reviews(), before);
+	});
+
+	it("takes the card changes of a backup file in on the Mac, too", async () => {
+		const file = buildPhoneBackup([], NOW, "iPhone", [op("c1", "unsuspend", "2026-11-05T10:00:00.000Z") as never]);
+		const out = await (await backup.POST(post("/api/mobile/backup", file))).json();
+		assert.deepEqual(out.cardChanges, { applied: 1, known: 0, newerOnMac: 0, unknownCards: 0, rejected: 0 });
+		assert.equal((await cardNow("c1")).suspended, undefined);
+		assert.equal((await (await backup.POST(post("/api/mobile/backup", file))).json()).cardChanges.known, 1);
 	});
 });
 

@@ -1,8 +1,11 @@
 "use client";
 
-import { ArrowLeftIcon, GraduationCapIcon, Undo2Icon } from "lucide-react";
+import { useState } from "react";
+import { ArrowLeftIcon, CalendarClockIcon, EllipsisIcon, GraduationCapIcon, PauseIcon, PencilIcon, Undo2Icon } from "lucide-react";
 import { CardFrame } from "@/components/study/card-frame";
+import { describeUnsent } from "@/src/core";
 import type { StudyCourseSummary, StudyGrade } from "@/src/core";
+import { PhoneCardEditor } from "./phone-card-editor";
 import { PhoneCounts } from "./phone-courses";
 import type { PhoneStudyApi } from "./study-api";
 import { useStudySession } from "./use-study-session";
@@ -24,6 +27,7 @@ export function PhoneSession({
 	onExit,
 	onError,
 	unsent,
+	unsentOps,
 	onBackup,
 	notice,
 }: {
@@ -33,12 +37,16 @@ export function PhoneSession({
 	onError?: (e: unknown) => void;
 	/** Answers only this phone has, asked for when the session is done. */
 	unsent?: () => number;
+	/** Card changes (pause, bury, edit) only this phone has. */
+	unsentOps?: () => number;
 	/** Hand them to the share sheet. */
 	onBackup?: () => void;
 	notice?: string | null;
 }) {
 	const s = useStudySession(api, course.id, onError);
 	const { state, card } = s;
+	const [menu, setMenu] = useState(false);
+	const waiting = (unsent?.() ?? 0) + (unsentOps?.() ?? 0);
 	return (
 		<div className="flex h-[calc(100dvh-env(safe-area-inset-top)-env(safe-area-inset-bottom))] flex-col" data-testid="phone-session">
 			<header className="flex items-center gap-1 px-2 py-1">
@@ -46,6 +54,18 @@ export function PhoneSession({
 					<ArrowLeftIcon className="size-5" />
 				</button>
 				<span className="min-w-0 flex-1 truncate text-center text-sm text-muted-foreground">{course.name}</span>
+				{card && !s.editing && (
+					<button
+						type="button"
+						onClick={() => setMenu((open) => !open)}
+						aria-label="More for this card"
+						aria-expanded={menu}
+						className="flex size-11 items-center justify-center rounded-full text-muted-foreground active:bg-accent"
+						data-testid="phone-more"
+					>
+						<EllipsisIcon className="size-5" />
+					</button>
+				)}
 				<button
 					type="button"
 					onClick={s.undo}
@@ -80,15 +100,13 @@ export function PhoneSession({
 						{s.answered > 0 ? `${s.answered} card${s.answered === 1 ? "" : "s"} answered. ` : ""}
 						Nothing else is due in {course.name}.
 					</p>
-					{unsent && onBackup && unsent() > 0 && (
+					{onBackup && waiting > 0 && (
 						<div className="flex flex-col items-center gap-2 rounded-xl border p-3" data-testid="phone-done-unsent">
-							<p className="text-sm">
-								{unsent()} answer{unsent() === 1 ? "" : "s"} only on this phone. Save a backup file now?
-							</p>
+							<p className="text-sm">{describeUnsent(unsent?.() ?? 0, unsentOps?.() ?? 0)} only on this phone. Save a backup file now?</p>
 							<button type="button" onClick={onBackup} className="h-11 rounded-lg bg-foreground px-5 text-sm font-medium text-background active:opacity-80" data-testid="phone-done-backup">
 								Save backup file
 							</button>
-							<p className="text-xs text-muted-foreground">Or update when your Mac is reachable: the answers go there.</p>
+							<p className="text-xs text-muted-foreground">Or update when your Mac is reachable: they go there.</p>
 						</div>
 					)}
 					{notice && (
@@ -102,7 +120,55 @@ export function PhoneSession({
 				</div>
 			)}
 
-			{card && (
+			{card && s.editing && <PhoneCardEditor key={card.id} card={card} busy={s.busy} onSave={s.saveEdit} onCancel={() => s.setEditing(false)} />}
+
+			{card && menu && !s.editing && (
+				<div className="mx-3 mb-2 grid grid-cols-3 gap-2" role="menu" data-testid="phone-menu">
+					<button
+						type="button"
+						role="menuitem"
+						onClick={() => {
+							setMenu(false);
+							s.setEditing(true);
+						}}
+						className="flex h-16 flex-col items-center justify-center gap-1 rounded-xl border bg-card text-xs active:bg-accent"
+						data-testid="phone-menu-edit"
+					>
+						<PencilIcon className="size-5" />
+						Edit
+					</button>
+					<button
+						type="button"
+						role="menuitem"
+						disabled={s.busy}
+						onClick={() => {
+							setMenu(false);
+							s.cardAction("bury");
+						}}
+						className="flex h-16 flex-col items-center justify-center gap-1 rounded-xl border bg-card text-xs active:bg-accent disabled:opacity-50"
+						data-testid="phone-menu-bury"
+					>
+						<CalendarClockIcon className="size-5" />
+						Until tomorrow
+					</button>
+					<button
+						type="button"
+						role="menuitem"
+						disabled={s.busy}
+						onClick={() => {
+							setMenu(false);
+							s.cardAction("suspend");
+						}}
+						className="flex h-16 flex-col items-center justify-center gap-1 rounded-xl border bg-card text-xs active:bg-accent disabled:opacity-50"
+						data-testid="phone-menu-suspend"
+					>
+						<PauseIcon className="size-5" />
+						Pause card
+					</button>
+				</div>
+			)}
+
+			{card && !s.editing && (
 				<>
 					<CardFrame key={`${card.id}:${s.shown}:${s.revealed ? "back" : "front"}`} card={card} revealed={s.revealed} picked={s.picked} onPick={s.setPicked} />
 					<footer className="border-t px-3 pb-3 pt-3">

@@ -121,8 +121,9 @@ describe("the backup file", () => {
 	});
 
 	it("says what it did, in a sentence", () => {
-		assert.equal(syncSummary({ added: 1, known: 0, unknownCards: 0, rejected: 0, reviewsTotal: 9 }), "1 new answer taken in.");
-		assert.equal(syncSummary({ added: 4, known: 3, unknownCards: 2, rejected: 1, reviewsTotal: 9 }), "4 new answers taken in, 3 already there, 2 for cards that no longer exist skipped, 1 unreadable line skipped.");
+		const none = { applied: 0, known: 0, newerOnMac: 0, unknownCards: 0, rejected: 0 };
+		assert.equal(syncSummary({ added: 1, known: 0, unknownCards: 0, rejected: 0, reviewsTotal: 9, cardChanges: none }), "1 new answer taken in.");
+		assert.equal(syncSummary({ added: 4, known: 3, unknownCards: 2, rejected: 1, reviewsTotal: 9, cardChanges: none }), "4 new answers taken in, 3 already there, 2 for cards that no longer exist skipped, 1 unreadable line skipped.");
 	});
 });
 

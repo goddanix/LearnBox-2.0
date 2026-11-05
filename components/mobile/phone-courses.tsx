@@ -1,6 +1,7 @@
 "use client";
 
 import { DownloadIcon, GraduationCapIcon, RefreshCwIcon } from "lucide-react";
+import { describeUnsent } from "@/src/core";
 import type { StudyCourseSummary, StudyQueueCounts } from "@/src/core";
 import type { PullProgress } from "./pull-deck";
 
@@ -44,6 +45,7 @@ export function PhoneCourses({
 	deviceName,
 	syncedAt,
 	unsent,
+	unsentOps = 0,
 	updating,
 	updated,
 	notice,
@@ -59,6 +61,8 @@ export function PhoneCourses({
 	syncedAt: string;
 	/** Answers given here that the Mac does not have yet. */
 	unsent: number;
+	/** Card changes (pause, bury, edit) made here that the Mac does not have yet. */
+	unsentOps?: number;
 	updating: PullProgress | null;
 	/** What the last update did, in a sentence. */
 	updated: string | null;
@@ -123,11 +127,11 @@ export function PhoneCourses({
 			<p className="flex flex-col gap-0.5 text-xs text-muted-foreground" data-testid="phone-sync">
 				<span>{updating ? progressText(updating) : `Cards from your Mac: ${ago(syncedAt)}.`}</span>
 				{updated && !updating && <span data-testid="phone-updated">{updated}</span>}
-				{unsent > 0 && <span data-testid="phone-unsent">{unsent} answer{unsent === 1 ? "" : "s"} only on this phone so far.</span>}
+				{unsent + unsentOps > 0 && <span data-testid="phone-unsent">{describeUnsent(unsent, unsentOps)} only on this phone so far.</span>}
 				{notice && <span data-testid="phone-notice">{notice}</span>}
 			</p>
 			<div className="flex flex-wrap gap-2 text-sm">
-				{unsent > 0 && (
+				{unsent + unsentOps > 0 && (
 					<button type="button" onClick={onBackup} className="flex h-11 items-center rounded-lg border px-4 active:bg-accent" data-testid="phone-backup">
 						Save backup file
 					</button>

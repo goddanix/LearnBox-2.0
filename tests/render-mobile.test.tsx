@@ -180,12 +180,12 @@ describe("Settings → Phone", () => {
 		const FILE = { v: 1, kind: "learnbox-phone-backup", createdAt: "2026-11-05T20:00:00.000Z", reviews: [{ cardId: "c1", at: "2026-11-05T19:00:00.000Z", grade: 3 }] };
 
 		it("is posted as it is, and the summary of what the Mac took in is shown", async () => {
-			const server = fakeServer(STATUS, { "POST /api/mobile/backup": () => ({ added: 3, known: 1, unknownCards: 0, rejected: 2, reviewsTotal: 40 }) });
+			const server = fakeServer(STATUS, { "POST /api/mobile/backup": () => ({ added: 3, known: 1, unknownCards: 0, rejected: 2, reviewsTotal: 40, cardChanges: { applied: 2, known: 0, newerOnMac: 1, unknownCards: 0, rejected: 0 } }) });
 			await mount(<PhoneSection />);
 			assert.equal($("phone-backup-note"), null);
 			await pick(asFile(JSON.stringify(FILE)));
 			assert.deepEqual(server.sent.find((s) => s.url === "/api/mobile/backup")?.body, FILE);
-			assert.equal($("phone-backup-note")!.textContent, "3 new answers taken in, 1 already there, 2 unreadable lines skipped.");
+			assert.equal($("phone-backup-note")!.textContent, "3 new answers taken in, 1 already there, 2 unreadable lines skipped, 2 card changes taken in, 1 card change left out because the card was changed on the Mac since.");
 			assert.equal($("phone-error"), null);
 		});
 
@@ -200,7 +200,7 @@ describe("Settings → Phone", () => {
 		});
 
 		it("shows the Mac's message when it is JSON but not a backup, and clears an old summary", async () => {
-			let answer: () => Response = () => Response.json({ added: 1, known: 0, unknownCards: 0, rejected: 0, reviewsTotal: 1 });
+			let answer: () => Response = () => Response.json({ added: 1, known: 0, unknownCards: 0, rejected: 0, reviewsTotal: 1, cardChanges: { applied: 0, known: 0, newerOnMac: 0, unknownCards: 0, rejected: 0 } });
 			const inner = fakeServer(STATUS);
 			const base = globalThis.fetch;
 			globalThis.fetch = (async (input: unknown, init?: RequestInit) => (String(input) === "/api/mobile/backup" ? answer() : base(input as RequestInfo, init))) as typeof fetch;

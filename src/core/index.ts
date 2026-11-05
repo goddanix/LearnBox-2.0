@@ -76,6 +76,7 @@ export * from "./create.ts"; // create: model-answer parsing + draft rules (PDF 
 export * from "./mobile.ts"; // phone access: gateway route rules, pairing codes, Tailscale status
 export * from "./phone-deck.ts"; // phone: cutting the deck on the Mac, reading it on the phone
 export * from "./phone-sync.ts"; // phone: answers going back to the Mac (sync upload, backup file)
+export * from "./phone-ops.ts"; // phone: card changes (pause, bury, edit) going back to the Mac
 export * from "./memory-study-store.ts"; // study: the ledgers in memory (the phone's working copy, tests)
 export * from "./lesson-cards.ts"; // create: cards from a lesson's statements (statements, drafts, adoption)
 export * from "./anki-import.ts"; // study: pure Anki-row → study mapping

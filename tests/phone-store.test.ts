@@ -1,7 +1,7 @@
 /**
  * The phone's storage, study engine and update from the Mac (Learnbox 2.0, Slices 10c/10d): the calls to the Mac and
  * the three ways they fail, the in-memory `PhoneDb`, the engine over it (offline studying, answers kept until the Mac
- * has them, pictures read from storage), `pullDeck` against a fake Mac, and the answers going back (`pushReviews`,
+ * has them, pictures read from storage), `pullDeck` against a fake Mac, and the answers going back (`pushChanges`,
  * the update as a whole, a backup file's round trip).
  */
 import assert from "node:assert/strict";
@@ -14,11 +14,11 @@ import { getPhoneToken, setPhoneToken } from "../components/mobile/phone-auth.ts
 import { sourceOver } from "../components/mobile/phone-source.ts";
 import { pullDeck } from "../components/mobile/pull-deck.ts";
 import type { PullProgress } from "../components/mobile/pull-deck.ts";
-import { pushReviews } from "../components/mobile/push-reviews.ts";
+import { pushChanges } from "../components/mobile/push-changes.ts";
 import type { StudyCard, StudyCourse, StudyReview } from "../src/core/contracts/study.ts";
 import { createMemoryStudyStore } from "../src/core/memory-study-store.ts";
 import { buildPhoneDeck } from "../src/core/phone-deck.ts";
-import { acceptPhoneReviews, buildPhoneBackup, readPhoneBackup } from "../src/core/phone-sync.ts";
+import { acceptPhoneChanges, buildPhoneBackup, readPhoneBackup } from "../src/core/phone-sync.ts";
 
 const NOW = new Date(2026, 10, 4, 10, 0, 0);
 const course = (id: string): StudyCourse => ({ id, name: id, bufferDays: 5, createdAt: NOW.toISOString() });
@@ -204,8 +204,7 @@ describe("taking the Mac's deck onto the phone", () => {
 			asked.push(url);
 			if (init.down) throw new TypeError("Failed to fetch");
 			if (url === "/api/phone/sync" && request?.method === "POST") {
-				const sent = (JSON.parse(String(request.body)) as { reviews: unknown }).reviews;
-				return Response.json(acceptPhoneReviews(store, sent));
+				return Response.json(acceptPhoneChanges(store, JSON.parse(String(request.body)) as { reviews?: unknown; ops?: unknown }));
 			}
 			if (url.startsWith("/api/phone/deck?reviewsFrom=")) {
 				const from = Number(new URL(url, "http://x").searchParams.get("reviewsFrom"));
@@ -340,9 +339,9 @@ describe("the phone's answers on their way to the Mac", () => {
 			asked.push(url);
 			if (down) throw new TypeError("Failed to fetch");
 			if (url === "/api/phone/sync") {
-				const sent = (JSON.parse(String(request!.body)) as { reviews: unknown[] }).reviews;
-				posts.push(sent.length);
-				return Response.json(acceptPhoneReviews(store, sent));
+				const body = JSON.parse(String(request!.body)) as { reviews?: unknown[]; ops?: unknown[] };
+				posts.push((body.reviews ?? body.ops ?? []).length);
+				return Response.json(acceptPhoneChanges(store, body));
 			}
 			if (url.startsWith("/api/phone/deck?reviewsFrom=")) return Response.json(buildPhoneDeck(store, () => null, Number(new URL(url, "http://x").searchParams.get("reviewsFrom")), NOW));
 			return new Response("{}", { status: 404 });
@@ -364,11 +363,11 @@ describe("the phone's answers on their way to the Mac", () => {
 		const db = await phoneWith(cards);
 		await answered(db, 3);
 		assert.equal((await db.unsentReviews()).length, 3);
-		assert.equal(await pushReviews(db), 3);
+		assert.equal((await pushChanges(db)).reviews, 3);
 		assert.deepEqual(mac.posts, [3]);
 		assert.equal(mac.store.readReviews().length, 3);
 		assert.deepEqual(await db.unsentReviews(), []);
-		assert.equal(await pushReviews(db), 0);
+		assert.equal((await pushChanges(db)).reviews, 0);
 		assert.deepEqual(mac.posts, [3], "nothing left, so the Mac is not even asked");
 	});
 
@@ -377,7 +376,7 @@ describe("the phone's answers on their way to the Mac", () => {
 		const mac = macWith(cards);
 		const db = await phoneWith(cards);
 		await db.addReviews(Array.from({ length: 4500 }, (_, i) => review("c1", new Date(Date.UTC(2026, 10, 1) + i * 1000).toISOString())));
-		assert.equal(await pushReviews(db), 4500);
+		assert.equal((await pushChanges(db)).reviews, 4500);
 		assert.deepEqual(mac.posts, [2000, 2000, 500]);
 		assert.equal(mac.store.readReviews().length, 4500);
 	});
@@ -388,10 +387,10 @@ describe("the phone's answers on their way to the Mac", () => {
 		const db = await phoneWith(cards);
 		await answered(db, 2);
 		mac.goDown();
-		await assert.rejects(pushReviews(db), (e) => e instanceof PhoneApiError && e.kind === "unreachable");
+		await assert.rejects(pushChanges(db), (e) => e instanceof PhoneApiError && e.kind === "unreachable");
 		assert.equal((await db.unsentReviews()).length, 2);
 		mac.comeUp();
-		assert.equal(await pushReviews(db), 2);
+		assert.equal((await pushChanges(db)).reviews, 2);
 		assert.equal(mac.store.readReviews().length, 2);
 	});
 
@@ -401,9 +400,9 @@ describe("the phone's answers on their way to the Mac", () => {
 		const db = await phoneWith(cards);
 		await answered(db, 1);
 		const lines = await db.unsentReviews();
-		await pushReviews(db);
+		await pushChanges(db);
 		await db.addReviews(lines);
-		await pushReviews(db);
+		await pushChanges(db);
 		assert.equal(mac.store.readReviews().length, 1);
 	});
 
@@ -411,7 +410,7 @@ describe("the phone's answers on their way to the Mac", () => {
 		const db = await phoneWith([card("c1")]);
 		await answered(db, 1);
 		globalThis.fetch = (async () => Response.json({ hello: "world" })) as typeof fetch;
-		await assert.rejects(pushReviews(db), (e) => e instanceof PhoneApiError && /unexpected/.test(e.message));
+		await assert.rejects(pushChanges(db), (e) => e instanceof PhoneApiError && /unexpected/.test(e.message));
 		assert.equal((await db.unsentReviews()).length, 1);
 	});
 
@@ -468,17 +467,17 @@ describe("the phone's answers on their way to the Mac", () => {
 		const fresh = await phoneWith(cards);
 		const read = readPhoneBackup(file)!;
 		const source = sourceOver(fresh, await startPhoneEngine(fresh, () => NOW));
-		const restored = await source.restore(read.backup.reviews);
+		const restored = await source.restore(read.backup);
 		assert.equal(restored.added, 2);
 		assert.equal(restored.source.engine!.unsent(), 2);
-		assert.equal((await restored.source.restore(read.backup.reviews)).added, 0, "reading the same file again adds nothing");
+		assert.equal((await restored.source.restore(read.backup)).added, 0, "reading the same file again adds nothing");
 
 		// and the Mac takes them in exactly once, whichever way they come
 		const mac = macWith(cards);
 		const { result } = await restored.source.update(() => {});
 		assert.equal(result.sent, 2);
 		assert.equal(mac.store.readReviews().length, 2);
-		assert.equal(acceptPhoneReviews(mac.store, file.reviews)!.added, 0, "the backup read on the Mac afterwards adds nothing either");
+		assert.equal(acceptPhoneChanges(mac.store, { reviews: file.reviews })!.added, 0, "the backup read on the Mac afterwards adds nothing either");
 	});
 
 	it("are kept apart from what the Mac's ledger gave: reading a backup never turns a Mac line into an unsent one", async () => {
@@ -486,7 +485,179 @@ describe("the phone's answers on their way to the Mac", () => {
 		const macLine = review("c1", "2026-11-02T09:00:00.000Z");
 		const db = await phoneWith(cards, [macLine]);
 		const source = sourceOver(db, await startPhoneEngine(db, () => NOW));
-		assert.equal((await source.restore([macLine])).added, 0);
+		assert.equal((await source.restore({ reviews: [macLine] })).added, 0);
 		assert.deepEqual(await db.unsentReviews(), []);
+	});
+});
+
+describe("card changes made on the phone (Slice 10e)", () => {
+	const AT = NOW.toISOString();
+	const LATER = new Date(NOW.getTime() + 60 * 60_000);
+	/** A Mac to talk to: the sync and the deck, on a store the test can look into. */
+	function mac(cards: StudyCard[]) {
+		const store = createMemoryStudyStore({ courses: [course("k1")], cards, reviews: [] });
+		const asked: string[] = [];
+		let down = false;
+		globalThis.fetch = (async (input: unknown, request?: RequestInit) => {
+			const url = String(input);
+			asked.push(url);
+			if (down) throw new TypeError("Failed to fetch");
+			if (url === "/api/phone/sync") return Response.json(acceptPhoneChanges(store, JSON.parse(String(request!.body)) as { reviews?: unknown; ops?: unknown }));
+			if (url.startsWith("/api/phone/deck?reviewsFrom=")) return Response.json(buildPhoneDeck(store, () => null, Number(new URL(url, "http://x").searchParams.get("reviewsFrom")), NOW));
+			return new Response("{}", { status: 404 });
+		}) as typeof fetch;
+		return { store, asked, goDown: () => (down = true), comeUp: () => (down = false), card: (id: string) => store.readCards().find((c) => c.id === id)! };
+	}
+	const act1 = (engine: NonNullable<Awaited<ReturnType<typeof startPhoneEngine>>>, cardId: string, action: "suspend" | "unsuspend" | "bury" | "unbury" | "edit", fields?: Record<string, string>) =>
+		engine.api.cardAction({ courseId: "k1", cardId, action, fields, step: 0 });
+
+	it("pausing a card takes it out of the queue, is written with the change itself, and is still there after a restart", async () => {
+		const db = await phoneWith([card("c1"), card("c2")]);
+		const engine = (await startPhoneEngine(db, () => NOW))!;
+		const out = await act1(engine, "c1", "suspend");
+		assert.equal(out.card?.id, "c2", "the next card is shown");
+		const snap = (await db.load())!;
+		assert.equal(snap.cards.find((c) => c.id === "c1")!.suspended, true);
+		assert.equal(snap.cards.find((c) => c.id === "c1")!.editedAt, AT);
+		assert.deepEqual(engine.unsentOps(), [{ cardId: "c1", action: "suspend", at: AT }]);
+		assert.deepEqual(await db.unsentOps(), engine.unsentOps());
+		const again = (await startPhoneEngine(db, () => NOW))!;
+		assert.deepEqual(again.unsentOps(), engine.unsentOps(), "the change waits for the Mac after a restart");
+		assert.equal((await again.api.next("k1", 0)).card?.id, "c2", "and the card stays paused");
+	});
+
+	it("burying hides the card until the next study day, and taking it back shows it again", async () => {
+		const db = await phoneWith([card("c1"), card("c2")]);
+		const engine = (await startPhoneEngine(db, () => NOW))!;
+		assert.equal((await act1(engine, "c1", "bury")).card?.id, "c2");
+		assert.equal((await db.load())!.cards.find((c) => c.id === "c1")!.buriedUntil, "2026-11-05");
+		assert.equal((await act1(engine, "c1", "unbury")).card?.id, "c1");
+		assert.deepEqual(engine.unsentOps().map((o) => o.action), ["bury", "unbury"]);
+		assert.equal((await db.load())!.cards.find((c) => c.id === "c1")!.buriedUntil, undefined);
+	});
+
+	it("an edit rewrites the fields on the card and on the others of its note, and records only what was changed", async () => {
+		const note = (id: string) => card(id, { origin: { kind: "anki-import", noteId: 9, deckName: "d" } as StudyCard["origin"], fields: { Front: "old", Back: "b" } });
+		const db = await phoneWith([note("a"), note("b"), card("other")]);
+		const engine = (await startPhoneEngine(db, () => NOW))!;
+		await act1(engine, "a", "edit", { Front: "new" });
+		const cards = (await db.load())!.cards;
+		assert.deepEqual(cards.map((c) => c.fields.Front), ["new", "new", "Q-other"]);
+		assert.equal(cards.find((c) => c.id === "b")!.editedAt, AT, "the sibling card is stamped too");
+		assert.deepEqual(engine.unsentOps(), [{ cardId: "a", action: "edit", at: AT, fields: { Front: "new" } }]);
+	});
+
+	it("records nothing for an edit that changes nothing, and refuses what the engine refuses", async () => {
+		const db = await phoneWith([card("c1")]);
+		const engine = (await startPhoneEngine(db, () => NOW))!;
+		await act1(engine, "c1", "edit", { Front: "Q-c1" });
+		assert.deepEqual(engine.unsentOps(), []);
+		await assert.rejects(act1(engine, "c1", "edit", { NoSuchField: "x" }), (e) => e instanceof PhoneApiError && /Unknown field/.test(e.message));
+		await assert.rejects(act1(engine, "nope", "suspend"), (e) => e instanceof PhoneApiError && /Unknown card/.test(e.message));
+		assert.deepEqual(await db.unsentOps(), []);
+		assert.equal((await db.load())!.cards[0]!.editedAt, undefined);
+	});
+
+	it("goes to the Mac with the update, after the answers; the Mac's cards change, and the phone ends up with nothing unsent", async () => {
+		const m = mac([card("c1"), card("c2")]);
+		const db = await phoneWith([card("c1"), card("c2")]);
+		const engine = (await startPhoneEngine(db, () => NOW))!;
+		await act1(engine, "c1", "suspend");
+		await act1(engine, "c2", "edit", { Front: "Edited on the phone" });
+		const progress: PullProgress[] = [];
+		const { result, source } = await sourceOver(db, engine).update((p) => progress.push({ ...p }));
+		assert.deepEqual([result.sent, result.sentOps, result.newerOnMac], [0, 2, 0]);
+		assert.equal(progress[0]!.phase, "send", "a phone with only card changes still says it is sending");
+		assert.equal(m.card("c1").suspended, true);
+		assert.equal(m.card("c1").editedAt, AT);
+		assert.equal(m.card("c2").fields.Front, "Edited on the phone");
+		assert.deepEqual([source.engine!.unsent(), source.engine!.unsentOps()], [0, []]);
+		assert.ok(m.asked.indexOf("/api/phone/sync") < m.asked.findIndex((u) => u.startsWith("/api/phone/deck")));
+		assert.deepEqual(await db.unsentOps(), []);
+		assert.equal((await db.load())!.ops.length, 0, "the changes the Mac has are let go when its deck came in");
+		// and again: nothing to send
+		const again = await source.update(() => {});
+		assert.equal(again.result.sentOps, 0);
+	});
+
+	it("is left out when the Mac changed the card after the learner did: the newer wins, and the Mac's version comes to the phone", async () => {
+		const m = mac([card("c1", { editedAt: LATER.toISOString(), fields: { Front: "Mac wrote this", Back: "A-c1" } })]);
+		const db = await phoneWith([card("c1")]);
+		const engine = (await startPhoneEngine(db, () => NOW))!;
+		await act1(engine, "c1", "edit", { Front: "Phone wrote this" });
+		const { result, source } = await sourceOver(db, engine).update(() => {});
+		assert.deepEqual([result.sentOps, result.newerOnMac], [1, 1]);
+		assert.equal(m.card("c1").fields.Front, "Mac wrote this");
+		assert.equal((await db.load())!.cards[0]!.fields.Front, "Mac wrote this", "the phone shows what the Mac has");
+		assert.deepEqual(source.engine!.unsentOps(), []);
+	});
+
+	it("stays on the phone when the Mac cannot be reached, and the deck is not touched", async () => {
+		const m = mac([card("c1")]);
+		const db = await phoneWith([card("c1")]);
+		const engine = (await startPhoneEngine(db, () => NOW))!;
+		await act1(engine, "c1", "suspend");
+		m.goDown();
+		await assert.rejects(sourceOver(db, engine).update(() => {}), (e) => e instanceof PhoneApiError && e.kind === "unreachable");
+		assert.equal((await db.unsentOps()).length, 1);
+		assert.equal((await db.load())!.cards[0]!.suspended, true, "the card is still paused on the phone");
+		m.comeUp();
+		assert.equal((await pushChanges(db)).ops, 1);
+		assert.equal(m.card("c1").suspended, true);
+	});
+
+	it("is sent again without harm when the mark was lost: the Mac knows a change it took in", async () => {
+		const m = mac([card("c1")]);
+		const db = await phoneWith([card("c1")]);
+		const engine = (await startPhoneEngine(db, () => NOW))!;
+		await act1(engine, "c1", "suspend");
+		// the Mac takes the change in, but the phone never hears of it (the connection drops before the mark)
+		const first = await pushChanges({ ...db, markOpsSent: async () => {} });
+		assert.equal(first.cardChanges.applied, 1);
+		assert.equal((await db.unsentOps()).length, 1, "still unsent here");
+		const second = await pushChanges(db);
+		assert.deepEqual([second.ops, second.cardChanges.known, second.cardChanges.applied], [1, 1, 0]);
+		assert.equal(m.card("c1").editedAt, AT);
+	});
+
+	it("is not marked as sent when the Mac answers with something that is not its sync answer", async () => {
+		const db = await phoneWith([card("c1")]);
+		const engine = (await startPhoneEngine(db, () => NOW))!;
+		await act1(engine, "c1", "suspend");
+		globalThis.fetch = (async () => Response.json({ added: 0 })) as typeof fetch;
+		await assert.rejects(pushChanges(db), (e) => e instanceof PhoneApiError && /unexpected/.test(e.message));
+		assert.equal((await db.unsentOps()).length, 1);
+	});
+
+	it("survives the phone's storage being wiped: a backup file brings the changes back, once, and the Mac takes them in once", async () => {
+		const db = await phoneWith([card("c1"), card("c2")]);
+		const engine = (await startPhoneEngine(db, () => NOW))!;
+		await act1(engine, "c1", "suspend");
+		await act1(engine, "c2", "edit", { Back: "better" });
+		const file = JSON.parse(JSON.stringify(buildPhoneBackup(engine.unsentReviews(), NOW, "iPhone", engine.unsentOps())));
+
+		const fresh = await phoneWith([card("c1"), card("c2")]);
+		const read = readPhoneBackup(file)!;
+		const restored = await sourceOver(fresh, await startPhoneEngine(fresh, () => NOW)).restore(read.backup);
+		assert.deepEqual([restored.added, restored.addedOps], [0, 2]);
+		assert.equal((await restored.source.restore(read.backup)).addedOps, 0, "reading the same file again adds nothing");
+		assert.equal(restored.source.engine!.unsentOps().length, 2);
+
+		const m = mac([card("c1"), card("c2")]);
+		const { result } = await restored.source.update(() => {});
+		assert.equal(result.sentOps, 2);
+		assert.equal(m.card("c1").suspended, true);
+		assert.equal(m.card("c2").fields.Back, "better");
+		assert.equal(acceptPhoneChanges(m.store, { ops: file.ops })!.cardChanges.known, 2, "the file read on the Mac afterwards adds nothing either");
+	});
+
+	it("keeps the changes the Mac does not have yet when a new deck comes in", async () => {
+		const db = await phoneWith([card("c1")]);
+		const engine = (await startPhoneEngine(db, () => NOW))!;
+		await act1(engine, "c1", "suspend");
+		await db.markOpsSent(await db.unsentOps());
+		await act1(engine, "c1", "unsuspend");
+		await db.applyDeck({ meta: META, courses: [course("k1")], cards: [card("c1")], macReviews: [] });
+		assert.deepEqual((await db.load())!.ops.map((o) => [o.op.action, o.sent]), [["unsuspend", false]]);
 	});
 });
