@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { studyApi as api, postJson } from "@/components/study/api";
 import { MCQ_LETTERS } from "@/src/core";
-import type { CreateJobDetail, McqQuestion, StudyCourseSummary } from "@/src/core";
+import type { CreateJobDetail, McqQuestion } from "@/src/core";
 
 const LAST_COURSE_KEY = "lb-create-course";
 
@@ -27,7 +27,7 @@ export function JobDetail({
 	onCourseAdded,
 }: {
 	jobId: string;
-	courses: StudyCourseSummary[];
+	courses: { id: string; name: string }[];
 	onBack: () => void;
 	/** The job list should reload (a run started or stopped, drafts adopted). */
 	onChanged: () => void;

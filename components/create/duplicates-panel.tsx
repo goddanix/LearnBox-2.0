@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { studyApi as api, postJson } from "@/components/study/api";
 import { CardBody } from "@/components/create/draft-card";
-import type { DuplicateGroup, DuplicateReview, SemanticStep } from "@/src/core";
+import type { CardDraft, CourseDuplicateGroup, CourseDuplicateReview, CourseSemanticStep, DuplicateGroup, DuplicateReview, SemanticStep } from "@/src/core";
 
 const STRICTNESS = [
 	{ value: 0.9, label: "Strict — nearly the same wording" },
@@ -12,14 +12,39 @@ const STRICTNESS = [
 	{ value: 0.6, label: "Loose — also similar questions" },
 ];
 
-type Review = DuplicateReview & { semantic: DuplicateGroup[] };
+/** Where the duplicates are looked for: the drafts of one PDF's job, or of all PDFs of a course. */
+export type DuplicatesScope = { jobId: string } | { courseId: string };
+
+type Review = (DuplicateReview & { semantic: DuplicateGroup[] }) | CourseDuplicateReview;
+
+/** A group as the panel shows it, whichever scope it comes from: cards are named by `ref` (a draft id, or "jobId|cardId" across PDFs). */
+interface ViewGroup {
+	id: string;
+	semantic: boolean;
+	reason: string;
+	keep: string;
+	cards: { ref: string; jobId: string; where: string; card: CardDraft }[];
+}
+
+const jobMedia = (jobId: string) => (file: string) => `/api/create/jobs/${jobId}/media/${encodeURIComponent(file)}`;
+
+function viewGroup(g: DuplicateGroup | CourseDuplicateGroup, jobId: string | null): ViewGroup {
+	const cards = g.cards.map((c) =>
+		"ref" in c
+			? { ref: c.ref, jobId: c.jobId, where: `${c.jobName} · page ${c.card.page}`, card: c.card }
+			: { ref: c.id, jobId: jobId ?? "", where: `Page ${c.page}`, card: c },
+	);
+	return { id: g.id, semantic: g.semantic === true, reason: g.reason, keep: g.keep, cards };
+}
 
 /**
- * Cards of the job that ask for the same thing: the quick comparison first, and — on request — Claude's check of
- * the content (the same question worded differently, one label at another place of a figure). Nothing is removed
- * without the learner clicking; a removed card can be brought back from its page.
+ * Cards of the job (or of all PDFs of a course) that ask for the same thing: the quick comparison first, and — on
+ * request — Claude's check of the content (the same question worded differently, one label at another place of a
+ * figure). Nothing is removed without the learner clicking; a removed card can be brought back from its page.
  */
-export function DuplicatesPanel({ jobId, mediaUrl, onChanged }: { jobId: string; mediaUrl: (file: string) => string; onChanged: () => void }) {
+export function DuplicatesPanel({ scope, onChanged }: { scope: DuplicatesScope; onChanged: () => void }) {
+	const jobId = "jobId" in scope ? scope.jobId : null;
+	const base = "jobId" in scope ? `/api/create/jobs/${scope.jobId}` : `/api/create/courses/${scope.courseId}`;
 	const [threshold, setThreshold] = useState(0.8);
 	const [review, setReview] = useState<Review | null>(null);
 	const [keep, setKeep] = useState<Record<string, string>>({});
@@ -31,24 +56,24 @@ export function DuplicatesPanel({ jobId, mediaUrl, onChanged }: { jobId: string;
 
 	const load = useCallback(async () => {
 		try {
-			setReview(await api<Review>(`/api/create/jobs/${jobId}/duplicates?threshold=${threshold}`));
+			setReview(await api<Review>(`${base}/duplicates?threshold=${threshold}`));
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		}
-	}, [jobId, threshold]);
+	}, [base, threshold]);
 	useEffect(() => {
 		void load();
 	}, [load]);
 
-	const groups = review ? [...review.groups, ...review.semantic] : [];
-	const keeperOf = (g: DuplicateGroup) => (g.cards.some((c) => c.id === keep[g.id]) ? keep[g.id]! : g.keep);
+	const groups: ViewGroup[] = review ? [...review.groups, ...review.semantic].map((g) => viewGroup(g, jobId)) : [];
+	const keeperOf = (g: ViewGroup) => (g.cards.some((c) => c.ref === keep[g.id]) ? keep[g.id]! : g.keep);
 
-	async function remove(chosen: DuplicateGroup[]) {
+	async function remove(chosen: ViewGroup[]) {
 		setBusy(true);
 		setError(null);
 		try {
-			const body = { groups: chosen.map((g) => ({ keep: keeperOf(g), remove: g.cards.map((c) => c.id).filter((id) => id !== keeperOf(g)) })) };
-			await api(`/api/create/jobs/${jobId}/duplicates`, postJson(body));
+			const body = { groups: chosen.map((g) => ({ keep: keeperOf(g), remove: g.cards.map((c) => c.ref).filter((ref) => ref !== keeperOf(g)) })) };
+			await api(`${base}/duplicates`, postJson(body));
 			await load();
 			onChanged();
 		} catch (e) {
@@ -64,7 +89,7 @@ export function DuplicatesPanel({ jobId, mediaUrl, onChanged }: { jobId: string;
 		stop.current = false;
 		try {
 			for (;;) {
-				const step = await api<SemanticStep>(`/api/create/jobs/${jobId}/duplicates/check`, postJson({ threshold }));
+				const step = await api<SemanticStep | CourseSemanticStep>(`${base}/duplicates/check`, postJson({ threshold }));
 				setProgress(step.done ? null : `Claude checked ${step.checkedNow} cards, ${step.remaining} pairs left…`);
 				if (step.error) {
 					setError(`Claude's check stopped: ${step.error}`);
@@ -84,7 +109,7 @@ export function DuplicatesPanel({ jobId, mediaUrl, onChanged }: { jobId: string;
 	return (
 		<section className="flex flex-col gap-3 rounded-lg border bg-card p-3" data-testid="duplicates-panel">
 			<div className="flex flex-wrap items-end gap-2">
-				<h3 className="mr-auto text-sm font-medium">Duplicate cards</h3>
+				<h3 className="mr-auto text-sm font-medium">{jobId ? "Duplicate cards" : "Duplicate cards across the PDFs of this course"}</h3>
 				<label className="flex flex-col gap-1 text-xs text-muted-foreground">
 					How alike
 					<select className="h-8 rounded-md border bg-background px-2 text-sm text-foreground" value={threshold} onChange={(e) => setThreshold(Number(e.target.value))}>
@@ -129,11 +154,11 @@ export function DuplicatesPanel({ jobId, mediaUrl, onChanged }: { jobId: string;
 						</div>
 						<ul className="flex flex-col gap-2">
 							{g.cards.map((c) => (
-								<li key={c.id} className="flex items-start gap-2 rounded border p-2 text-sm">
-									<input type="radio" className="mt-1" name={`keep-${g.id}`} checked={keeperOf(g) === c.id} onChange={() => setKeep((prev) => ({ ...prev, [g.id]: c.id }))} aria-label="Keep this card" />
+								<li key={c.ref} className="flex items-start gap-2 rounded border p-2 text-sm">
+									<input type="radio" className="mt-1" name={`keep-${g.id}`} checked={keeperOf(g) === c.ref} onChange={() => setKeep((prev) => ({ ...prev, [g.id]: c.ref }))} aria-label="Keep this card" />
 									<div className="min-w-0 flex-1">
-										<p className="mb-0.5 text-xs text-muted-foreground">Page {c.page}</p>
-										<CardBody c={c} mediaUrl={mediaUrl} />
+										<p className="mb-0.5 text-xs text-muted-foreground">{c.where}</p>
+										<CardBody c={c.card} mediaUrl={jobMedia(c.jobId)} />
 									</div>
 								</li>
 							))}

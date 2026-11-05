@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FileUpIcon, SparklesIcon } from "lucide-react";
 import { CardsJobDetail } from "@/components/create/cards-job-detail";
+import { CourseDetail } from "@/components/create/course-detail";
+import { CoursesPanel } from "@/components/create/courses-panel";
 import { JobDetail } from "@/components/create/job-detail";
 import { LegacyImport } from "@/components/create/legacy-import";
 import { NewCardsForm } from "@/components/create/new-cards-form";
@@ -10,7 +12,7 @@ import { NewJobForm } from "@/components/create/new-job-form";
 import { SidebarToggle } from "@/components/sidebar";
 import { studyApi as api } from "@/components/study/api";
 import { Button } from "@/components/ui/button";
-import type { CreateJobSummary, LectureSource, StudyCourseSummary } from "@/src/core";
+import type { CreateCourse, CreateJobSummary, LectureSource } from "@/src/core";
 
 /**
  * The Create area: the PDF library (the same one the lecture picker uses), the
@@ -31,10 +33,34 @@ const STATE_LABEL: Record<CreateJobSummary["state"], string> = {
 	interrupted: "Interrupted",
 };
 
+/** PDFs and their drafts, or the courses (topics, drafts by topic). */
+function ViewSwitch({ view, onView }: { view: "pdfs" | "courses"; onView: (view: "pdfs" | "courses") => void }) {
+	const tab = (id: "pdfs" | "courses", label: string) => (
+		<button
+			type="button"
+			role="tab"
+			aria-selected={view === id}
+			onClick={() => onView(id)}
+			data-testid={`create-tab-${id}`}
+			className={`rounded-md px-3 py-1 text-sm transition-colors ${view === id ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+		>
+			{label}
+		</button>
+	);
+	return (
+		<div role="tablist" className="flex gap-1" aria-label="Create">
+			{tab("pdfs", "PDFs and drafts")}
+			{tab("courses", "Courses")}
+		</div>
+	);
+}
+
 export function CreateView() {
 	const [lectures, setLectures] = useState<LectureSource[] | null>(null);
 	const [jobs, setJobs] = useState<CreateJobSummary[] | null>(null);
-	const [courses, setCourses] = useState<StudyCourseSummary[]>([]);
+	const [courses, setCourses] = useState<CreateCourse[] | null>(null);
+	const [view, setView] = useState<"pdfs" | "courses">("pdfs");
+	const [openCourse, setOpenCourse] = useState<string | null>(null);
 	const [openJob, setOpenJob] = useState<{ id: string; kind: CreateJobSummary["kind"] } | null>(null);
 	const [newFor, setNewFor] = useState<{ lecture: LectureSource; kind: CreateJobSummary["kind"] } | null>(null);
 	const [uploading, setUploading] = useState(false);
@@ -58,7 +84,7 @@ export function CreateView() {
 	}, []);
 	const loadCourses = useCallback(async () => {
 		try {
-			setCourses((await api<{ courses: StudyCourseSummary[] }>("/api/study/courses")).courses);
+			setCourses((await api<{ courses: CreateCourse[] }>("/api/create/courses")).courses);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		}
@@ -101,7 +127,7 @@ export function CreateView() {
 			<header className="flex items-center gap-2 px-3 py-2">
 				<SidebarToggle />
 			</header>
-			<div className={`mx-auto flex w-full ${openJob?.kind === "cards" ? "max-w-6xl" : "max-w-2xl"} flex-1 flex-col gap-4 overflow-y-auto px-4 pb-10`}>
+			<div className={`mx-auto flex w-full ${openJob?.kind === "cards" ? "max-w-6xl" : view === "courses" && !openJob ? "max-w-4xl" : "max-w-2xl"} flex-1 flex-col gap-4 overflow-y-auto px-4 pb-10`}>
 				<div className="flex items-center gap-2 pt-4 text-muted-foreground">
 					<SparklesIcon className="size-4" />
 					<h1 className="text-xs uppercase tracking-widest">Create — turn a PDF into study material</h1>
@@ -115,16 +141,39 @@ export function CreateView() {
 				{openJob ? (
 					<Detail
 						jobId={openJob.id}
-						courses={courses}
+						courses={courses ?? []}
 						onBack={() => {
 							setOpenJob(null);
 							void loadJobs();
+							void loadCourses();
 						}}
-						onChanged={() => void loadJobs()}
+						onChanged={() => {
+							void loadJobs();
+							void loadCourses();
+						}}
 						onCourseAdded={() => void loadCourses()}
 					/>
+				) : view === "courses" ? (
+					<>
+						<ViewSwitch view={view} onView={setView} />
+						{openCourse ? (
+							<CourseDetail
+								courseId={openCourse}
+								jobs={jobs ?? []}
+								onBack={() => setOpenCourse(null)}
+								onOpenJob={(job) => setOpenJob({ id: job.id, kind: job.kind })}
+								onChanged={() => {
+									void loadCourses();
+									void loadJobs();
+								}}
+							/>
+						) : (
+							<CoursesPanel courses={courses} onOpen={setOpenCourse} onAdded={() => void loadCourses()} />
+						)}
+					</>
 				) : (
 					<>
+						<ViewSwitch view={view} onView={setView} />
 						{newFor && lectures && (
 							(() => {
 								const created = (job: CreateJobSummary) => {
@@ -133,7 +182,7 @@ export function CreateView() {
 									void loadJobs();
 								};
 								return newFor.kind === "cards" ? (
-									<NewCardsForm lecture={newFor.lecture} onCancel={() => setNewFor(null)} onCreated={created} />
+									<NewCardsForm lecture={newFor.lecture} courses={courses ?? []} onCancel={() => setNewFor(null)} onCreated={created} />
 								) : (
 									<NewJobForm lecture={newFor.lecture} lectures={lectures} onCancel={() => setNewFor(null)} onCreated={created} />
 								);
@@ -193,6 +242,7 @@ export function CreateView() {
 										<span className="min-w-0 flex-1 truncate text-base">{j.name}</span>
 										<span className="text-xs text-muted-foreground">
 											{KIND_LABEL[j.kind]} · {STATE_LABEL[j.state]}
+											{j.courseId && courses?.some((c) => c.id === j.courseId) && ` · ${courses.find((c) => c.id === j.courseId)?.name}`}
 										</span>
 									</span>
 									<span className="h-1 overflow-hidden rounded-full bg-muted" aria-hidden>

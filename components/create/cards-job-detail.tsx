@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { studyApi as api, postJson } from "@/components/study/api";
 import { CardsFocus } from "@/components/create/cards-focus";
 import { DuplicatesPanel } from "@/components/create/duplicates-panel";
-import type { CardsJobDetail, StudyCourseSummary } from "@/src/core";
+import type { CardsJobDetail } from "@/src/core";
 
 const LAST_COURSE_KEY = "lb-create-course";
 
@@ -20,6 +20,7 @@ function remembered(): string {
 }
 
 const patch = (body: object): RequestInit => ({ ...postJson(body), method: "PATCH" });
+const put = (body: object): RequestInit => ({ ...postJson(body), method: "PUT" });
 
 /** The topics the cards favour (or are limited to) — they count for the pages processed from now on. */
 function FocusTopics({ jobId, topics, strict, onSaved }: { jobId: string; topics: string[]; strict: boolean; onSaved: () => void }) {
@@ -74,7 +75,7 @@ export function CardsJobDetail({
 	onCourseAdded,
 }: {
 	jobId: string;
-	courses: StudyCourseSummary[];
+	courses: { id: string; name: string }[];
 	onBack: () => void;
 	/** The job list should reload (a run started or stopped, drafts adopted). */
 	onChanged: () => void;
@@ -82,7 +83,7 @@ export function CardsJobDetail({
 }) {
 	const [detail, setDetail] = useState<CardsJobDetail | null>(null);
 	const [error, setError] = useState<string | null>(null);
-	const [courseId, setCourseId] = useState(remembered);
+	const [courseId, setCourseId] = useState("");
 	const [newCourse, setNewCourse] = useState("");
 	const [note, setNote] = useState<string | null>(null);
 	const [busy, setBusy] = useState(false);
@@ -108,7 +109,9 @@ export function CardsJobDetail({
 		return () => clearInterval(timer);
 	}, [running, load]);
 
-	const effectiveCourse = courses.some((c) => c.id === courseId) ? courseId : (courses[0]?.id ?? "");
+	// the course picked here, else the course the PDF belongs to, else the one used last
+	const known = (id: string | undefined) => (id !== undefined && courses.some((c) => c.id === id) ? id : "");
+	const effectiveCourse = known(courseId) || known(detail?.job.courseId) || known(remembered()) || (courses[0]?.id ?? "");
 
 	/** Drafts that can still be adopted: neither thrown away nor already a card — and of those, the selected ones. */
 	const eligible = useMemo(() => (detail?.pages ?? []).flatMap((p) => p.cards).filter((c) => !c.deleted && !c.adopted), [detail]);
@@ -135,6 +138,7 @@ export function CardsJobDetail({
 		await load();
 		onChanged();
 	}, [load, onChanged]);
+	const setCourseOfPdf = (id: string) => act(() => api(`/api/create/jobs/${jobId}/course`, put({ courseId: id || null })));
 	const selectAll = (include: boolean) => act(() => api(`/api/create/jobs/${jobId}/include`, postJson({ cardIds: eligible.map((c) => c.id), include })));
 
 	async function adopt() {
@@ -213,6 +217,26 @@ export function CardsJobDetail({
 				{job.counts.error > 0 && ` · ${job.counts.error} page${job.counts.error === 1 ? "" : "s"} failed`}
 			</p>
 
+			<label className="flex flex-wrap items-center gap-2 text-sm" data-testid="job-course">
+				<span className="text-xs text-muted-foreground">This PDF belongs to the course</span>
+				<select
+					className="h-8 rounded-md border bg-background px-2 text-sm"
+					value={known(job.courseId)}
+					disabled={busy}
+					onChange={(e) => void setCourseOfPdf(e.target.value)}
+					aria-label="Course of this PDF"
+					data-testid="job-course-select"
+				>
+					<option value="">None</option>
+					{courses.map((c) => (
+						<option key={c.id} value={c.id}>
+							{c.name}
+						</option>
+					))}
+				</select>
+				<span className="text-xs text-muted-foreground">Its topics are the focus of the pages made from now on.</span>
+			</label>
+
 			<div className="flex flex-wrap items-end gap-2 rounded-lg border bg-card p-3" data-testid="adopt-bar">
 				<label className="flex flex-col gap-1 text-xs text-muted-foreground">
 					Add to course
@@ -264,7 +288,7 @@ export function CardsJobDetail({
 							{showDuplicates ? "Hide duplicates" : "Look for duplicates"}
 						</Button>
 					</div>
-					{showDuplicates && <DuplicatesPanel jobId={jobId} mediaUrl={mediaUrl} onChanged={() => void reload()} />}
+					{showDuplicates && <DuplicatesPanel scope={{ jobId }} onChanged={() => void reload()} />}
 
 					<ul className="flex flex-col gap-1.5" data-testid="job-pages">
 						{detail.pages.map((p) => {

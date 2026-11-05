@@ -63,7 +63,7 @@ const TOPICS_PDF_CHARS = 15_000;
 
 function requireCourse(id: string, deps: CreateDeps): StudyCourse {
 	const course = deps.study.readCourses().find((c) => c.id === id);
-	if (!course) throw new CreateInputError("Unknown subject", 404);
+	if (!course) throw new CreateInputError("Unknown course", 404);
 	return course;
 }
 
@@ -129,8 +129,8 @@ export function updateCourse(id: string, input: { name?: unknown; topics?: unkno
 	let next: StudyCourse = course;
 	if (input.name !== undefined && input.name !== null) {
 		const name = typeof input.name === "string" ? input.name.trim().replace(/\s+/g, " ") : "";
-		if (name.length === 0 || name.length > 80) throw new CreateInputError("A subject needs a name of 1-80 characters", 400);
-		if (deps.study.readCourses().some((c) => c.id !== id && c.name.toLowerCase() === name.toLowerCase())) throw new CreateInputError(`A subject called "${name}" already exists`, 400);
+		if (name.length === 0 || name.length > 80) throw new CreateInputError("A course needs a name of 1-80 characters", 400);
+		if (deps.study.readCourses().some((c) => c.id !== id && c.name.toLowerCase() === name.toLowerCase())) throw new CreateInputError(`A course called "${name}" already exists`, 400);
 		next = { ...next, name };
 		deps.study.upsertCourse(next);
 	}
@@ -244,7 +244,7 @@ export async function proposeTopics(courseId: string, opts: { signal?: AbortSign
 		}
 	}
 	const current = course.topics ?? [];
-	if (current.length === 0 && pageTopics.length === 0) throw new CreateInputError("This subject has no topic list yet and no lectures with content.", 400);
+	if (current.length === 0 && pageTopics.length === 0) throw new CreateInputError("This course has no topic list yet and no lectures with content.", 400);
 	const common = [...labels].sort((a, b) => b[1] - a[1]).slice(0, 40);
 	const raw = await ask(courseId, { prompt: consolidatePrompt(course.name, current, pageTopics, common), system: CONSOLIDATE_SYSTEM, signal: opts.signal }, deps);
 	const topics = cleanProposal(raw.topics);
@@ -297,7 +297,7 @@ export function assignStatus(courseId: string): AssignStatus {
 export function startAssign(courseId: string, deps: CreateDeps = defaultCreateDeps()): boolean {
 	const course = requireCourse(courseId, deps);
 	const topics = course.topics ?? [];
-	if (topics.length === 0) throw new CreateInputError("Set the topics of the subject first.", 400);
+	if (topics.length === 0) throw new CreateInputError("Set the topics of the course first.", 400);
 	if (assignStatus(courseId).state === "running") return false;
 	const status: AssignStatus = { state: "running", done: 0, total: 0, result: null, error: "" };
 	runs.set(courseId, status);

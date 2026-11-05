@@ -6,13 +6,15 @@ import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { DraftCard } from "../components/create/draft-card.tsx";
 import { AddCardForm, CardEditor } from "../components/create/card-editor.tsx";
+import { CourseDetail } from "../components/create/course-detail.tsx";
+import { CoursesPanel } from "../components/create/courses-panel.tsx";
 import { DuplicatesPanel } from "../components/create/duplicates-panel.tsx";
 import { LegacyImport } from "../components/create/legacy-import.tsx";
 import { PagePicture } from "../components/create/page-picture.tsx";
 import { NewCardsForm } from "../components/create/new-cards-form.tsx";
 import { NewJobForm } from "../components/create/new-job-form.tsx";
 import type { LectureSource } from "../src/core/contracts.ts";
-import type { CardDraft, FrontBackCard, LegendClozeCard, OcclusionCard } from "../src/core/contracts/create-cards.ts";
+import type { CardDraft, CreateCourse, FrontBackCard, LegendClozeCard, OcclusionCard } from "../src/core/contracts/create-cards.ts";
 
 /**
  * The Create area's static surface (Learnbox 2.0, 2026-11): the new-job form's
@@ -80,6 +82,71 @@ describe("NewCardsForm", () => {
 		assert.match(html, /Nothing is added to your cards until you adopt it/);
 		assert.doesNotMatch(html, /Only these topics/, "the strict switch shows once there are topics");
 		assert.doesNotMatch(html, /Course language/, "the course language shows with the vocabulary switch");
+	});
+});
+
+describe("NewCardsForm for a course", () => {
+	const courses = [
+		{ id: "cardio", name: "Cardiology", topics: ["Heart failure", "Valves"], strict: true },
+		{ id: "renal", name: "Renal", topics: [], strict: false },
+	];
+
+	it("offers the courses, with how many topics each has, and none by default", () => {
+		const html = renderToStaticMarkup(<NewCardsForm lecture={lecture("a", "Cardiology")} courses={courses} onCreated={noop} onCancel={noop} />);
+		assert.match(html, /data-testid="cards-course"/);
+		assert.match(html, /<option value="" selected="">No course<\/option>/);
+		assert.match(html, /<option value="cardio">Cardiology \(2 topics\)<\/option>/);
+		assert.match(html, /<option value="renal">Renal<\/option>/);
+	});
+
+	it("has no course choice when there is no course yet", () => {
+		const html = renderToStaticMarkup(<NewCardsForm lecture={lecture("a", "Cardiology")} onCreated={noop} onCancel={noop} />);
+		assert.doesNotMatch(html, /cards-course/);
+	});
+});
+
+const course = (over: Partial<CreateCourse> = {}): CreateCourse => ({ id: "cardio", name: "Cardiology", topics: [], strict: false, jobs: 0, drafts: 0, ...over });
+
+describe("CoursesPanel", () => {
+	it("says so when there is no course, and offers a new one", () => {
+		const html = renderToStaticMarkup(<CoursesPanel courses={[]} onOpen={noop} onAdded={noop} />);
+		assert.match(html, /data-testid="courses-empty"/);
+		assert.match(html, /data-testid="course-new-name"/);
+		assert.match(html, /<button[^>]*disabled=""[^>]*data-testid="course-add"|data-testid="course-add"[^>]*disabled=""/, "nothing to add without a name");
+	});
+
+	it("lists the courses with their topics, PDFs and drafts", () => {
+		const html = renderToStaticMarkup(
+			<CoursesPanel
+				courses={[course({ topics: ["Heart failure", "Valves"], strict: true, jobs: 2, drafts: 41, deadline: "2026-12-01" }), course({ id: "renal", name: "Renal", jobs: 1, drafts: 1 })]}
+				onOpen={noop}
+				onAdded={noop}
+			/>,
+		);
+		assert.equal((html.match(/data-testid="course-row"/g) ?? []).length, 2);
+		assert.match(html, /2 topics \(only these\) · 2 PDFs · 41 drafts · exam 2026-12-01/);
+		assert.match(html, /No topics yet · 1 PDF · 1 draft/);
+	});
+
+	it("shows a loading note until the courses are there", () => {
+		assert.match(renderToStaticMarkup(<CoursesPanel courses={null} onOpen={noop} onAdded={noop} />), /Loading…/);
+	});
+});
+
+describe("CourseDetail", () => {
+	it("starts with a way back, before the course is loaded", () => {
+		const html = renderToStaticMarkup(<CourseDetail courseId="cardio" jobs={[]} onBack={noop} onOpenJob={noop} onChanged={noop} />);
+		assert.match(html, /data-testid="course-detail"/);
+		assert.match(html, /Back/);
+		assert.doesNotMatch(html, /course-topics/);
+	});
+});
+
+describe("DuplicatesPanel across a course", () => {
+	it("names the scope in its title", () => {
+		const html = renderToStaticMarkup(<DuplicatesPanel scope={{ courseId: "cardio" }} onChanged={noop} />);
+		assert.match(html, /Duplicate cards across the PDFs of this course/);
+		assert.match(html, /data-testid="dedupe-check"/);
 	});
 });
 
@@ -213,7 +280,7 @@ describe("CardEditor and AddCardForm", () => {
 
 describe("DuplicatesPanel", () => {
 	it("starts with the strictness choice and Claude's check, before anything is loaded", () => {
-		const html = renderToStaticMarkup(<DuplicatesPanel jobId="crt_x" mediaUrl={media} onChanged={noop} />);
+		const html = renderToStaticMarkup(<DuplicatesPanel scope={{ jobId: "crt_x" }} onChanged={noop} />);
 		assert.match(html, /Duplicate cards/);
 		assert.match(html, /<option value="0\.8" selected="">Normal<\/option>/);
 		assert.match(html, /data-testid="dedupe-check"/);

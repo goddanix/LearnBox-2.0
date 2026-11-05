@@ -154,7 +154,7 @@ export async function createCardsJob(input: CreateCardsJobInput, deps: CardsDeps
 
 	const courseId = typeof input.courseId === "string" ? input.courseId.trim() : "";
 	const course = courseId ? deps.study.readCourses().find((c) => c.id === courseId) : undefined;
-	if (courseId && !course) throw new CreateInputError("Unknown subject", 404);
+	if (courseId && !course) throw new CreateInputError("Unknown course", 404);
 
 	const settings = cleanCardSettings(input.settings);
 	const namesFocus = typeof input.settings === "object" && input.settings !== null && "focusTopics" in input.settings;
