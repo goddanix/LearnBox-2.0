@@ -85,6 +85,7 @@ export function summarize(job: CreateJob): CreateJobSummary {
 		...(job.fatal ? { fatal: job.fatal } : {}),
 		createdAt: job.createdAt,
 		nPages: job.nPages,
+		...(job.kind === "cards" && job.courseId ? { courseId: job.courseId } : {}),
 		total: pages.length,
 		counts: countPages(job.pages),
 		drafts: pages.reduce((sum, p) => sum + p.count, 0),

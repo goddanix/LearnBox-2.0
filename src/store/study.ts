@@ -79,7 +79,9 @@ const isCourse = (v: unknown): v is StudyCourse =>
 	isNumber(v.bufferDays) &&
 	isString(v.createdAt) &&
 	(v.deadline === undefined || isString(v.deadline)) &&
-	(v.newPerDay === undefined || isNumber(v.newPerDay));
+	(v.newPerDay === undefined || isNumber(v.newPerDay)) &&
+	(v.topics === undefined || (Array.isArray(v.topics) && v.topics.every(isString))) &&
+	(v.strictTopics === undefined || typeof v.strictTopics === "boolean");
 
 const CARD_KINDS = new Set(["basic", "cloze", "occlusion", "mcq"]);
 

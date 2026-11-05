@@ -23,6 +23,10 @@ export * from "./render-settings.ts";
 export * from "./question-core.ts";
 // Drawing and dragging boxes on a page picture (the Create focus screen).
 export * from "./box-edit.ts";
+// Subjects: their topics, the drafts of a subject across PDFs, and how well it was remembered (Create).
+export * from "./course-topics.ts";
+export * from "./course-cards.ts";
+export * from "./retention.ts";
 // The event bus (push architecture, 2026-10-02): vocabulary + emit/subscribe
 // for every layer; the browser shell consumes the types + the runtime names
 // through this barrel (shell law: pure core via @/src/core only).

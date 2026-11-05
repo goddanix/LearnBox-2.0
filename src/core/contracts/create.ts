@@ -94,6 +94,10 @@ export interface McqJob extends CreateJobBase {
 export interface CardsJob extends CreateJobBase {
 	kind: "cards";
 	settings: CardSettings;
+	/** The subject (study course) the PDF belongs to: its topics were the focus when the job was made, and its drafts are adopted there. */
+	courseId?: string;
+	/** Note for the page prompt from how the subject was remembered so far ("" = none); fixed once per job so a rerun asks the same. */
+	retentionHint?: string;
 	/** Latin anatomical terms on/off, decided once before the first page. */
 	latin?: boolean;
 	/** The term glossary of the document, built once (absent = not built yet). */
@@ -147,6 +151,8 @@ export interface CreateJobSummary {
 	fatal?: string;
 	createdAt: string;
 	nPages: number;
+	/** Cards jobs: the subject the PDF belongs to. */
+	courseId?: string;
 	/** Pages in the job's range. */
 	total: number;
 	counts: Record<CreatePageStatus, number>;

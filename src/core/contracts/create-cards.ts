@@ -115,6 +115,8 @@ export interface CardBase {
 	/** Edited by the learner / brought back after a machine deletion: never removed automatically. */
 	edited?: boolean;
 	restored?: boolean;
+	/** The labels the card had before "assign to topics" replaced them (so the assignment can be undone). */
+	prevTags?: string[];
 	/** Set once the draft became a study card. */
 	adopted?: Adoption;
 }
@@ -253,4 +255,101 @@ export interface CardsJobDetail {
 	job: CreateJobSummary;
 	settings: CardSettings;
 	pages: CardJobPageView[];
+}
+
+// ─── subjects (courses) and their topics ─────────────────────────────────────
+
+/** A subject as the Create area shows it: its topics, and the PDFs and drafts made for it. */
+export interface CreateCourse {
+	id: string;
+	name: string;
+	topics: string[];
+	/** Only these topics: the PDFs made for the subject skip pages about anything else. */
+	strict: boolean;
+	deadline?: string;
+	/** Cards jobs (PDFs) made for the subject, and the drafts (not deleted) they hold now. */
+	jobs: number;
+	drafts: number;
+}
+
+/** A draft of a subject with the PDF it comes from (card ids are unique within a PDF only). */
+export interface CourseDraft {
+	jobId: string;
+	jobName: string;
+	card: CardDraft;
+}
+
+/** A topic label on the drafts of a subject: drafts selected for adoption, and all drafts with it. */
+export interface CourseTag {
+	tag: string;
+	selected: number;
+	total: number;
+}
+
+/** What a list of topics from a file did to the subject's topics. */
+export interface TopicsFromFile {
+	course: CreateCourse;
+	source: "txt" | "pdf";
+	/** Entries found in the file. */
+	found: number;
+	/** Of those, the ones that belong to a topic set already. */
+	matched: number;
+	/** Topics the file added. */
+	added: string[];
+}
+
+/** A tidied topic list Claude suggests; nothing is saved until the learner takes it. */
+export interface ProposedTopic {
+	name: string;
+	/** From the learner's list, or found on the lecture pages. */
+	source: "list" | "lecture";
+}
+
+export interface TopicProposal {
+	topics: ProposedTopic[];
+	current: string[];
+}
+
+/** The assignment of a subject's drafts to its topics (runs in the background). */
+export interface AssignStatus {
+	state: "none" | "running" | "done" | "error";
+	done: number;
+	total: number;
+	/** Drafts given a topic, and those that fit none ("Other"). */
+	result: { assigned: number; other: number; skipped: number } | null;
+	error: string;
+}
+
+/** A card of a duplicate group across the PDFs of a subject. `ref` ("jobId|cardId") names it in a removal. */
+export interface CourseGroupCard {
+	ref: string;
+	jobId: string;
+	jobName: string;
+	card: CardDraft;
+}
+
+export interface CourseDuplicateGroup {
+	id: string;
+	kind: "text" | "occlusion";
+	reason: string;
+	score: number;
+	/** `ref` of the card to keep. */
+	keep: string;
+	/** The keeper first. */
+	cards: CourseGroupCard[];
+	semantic?: true;
+}
+
+export interface CourseDuplicateReview {
+	groups: CourseDuplicateGroup[];
+	semantic: CourseDuplicateGroup[];
+	autoRemoved: number;
+}
+
+export interface CourseSemanticStep {
+	checkedNow: number;
+	remaining: number;
+	groups: CourseDuplicateGroup[];
+	done: boolean;
+	error: string | null;
 }

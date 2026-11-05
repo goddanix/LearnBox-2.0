@@ -29,6 +29,10 @@ export interface StudyCourse {
 	bufferDays: number;
 	/** Manual new-cards-per-day override; absent = automatic. */
 	newPerDay?: number;
+	/** The topics of the subject (MedAnki's Themenliste): every PDF made for the subject favours them. */
+	topics?: string[];
+	/** Only these topics: pages about anything else are skipped. */
+	strictTopics?: boolean;
 	createdAt: string;
 }
 

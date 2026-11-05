@@ -94,6 +94,17 @@ export const PRAKTIKUM_HINT =
 
 export const kindHint = (kind: CardMaterialKind): string => (kind === "practical" ? PRAKTIKUM_HINT : "");
 
+/**
+ * A subject that was remembered badly lately gets somewhat more core-knowledge cards (MedAnki's retention.py; the
+ * number comes from Learnbox's own review ledger now, see core/retention.ts, so the wording names the weeks, not an
+ * Anki deadline).
+ */
+export const retentionHint = (subject: string, retention: number, days: number): string =>
+	"\n# Rückmeldung aus früherem Lernen\n" +
+	`Im Fach „${subject}“ lag die Retention (Anteil bestandener Wiederholungen) in den letzten ${days} Tagen im Schnitt nur bei ${Math.round(retention)}%. ` +
+	"Sei deshalb bei DIESEM Fach etwas großzügiger mit Kernwissen-Karten (priority 1) und prüfe besonders sorgfältig, dass kein wichtiger Fakt der Seite " +
+	"übersehen wird – ohne von den übrigen Regeln (Selektivität, Minimum-Information-Prinzip) abzuweichen.\n";
+
 // ─── the card system prompt (prompts.py) ─────────────────────────────────────
 
 const SYSTEM_PROMPT = `\
