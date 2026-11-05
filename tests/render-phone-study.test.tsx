@@ -1,0 +1,325 @@
+/**
+ * The phone's review screens (Learnbox 2.0, Slice 10b), in a live linkedom page with the study engine faked:
+ * the course list, a session (show answer → grade → next card, undo, done), the pairing guard, the failure
+ * banners — and the online engine's mapping of the Mac's study routes.
+ */
+import { dom } from "./helpers/linkedom-page.ts";
+import React, { act } from "react";
+(globalThis as Record<string, unknown>).React = React;
+
+import assert from "node:assert/strict";
+import { afterEach, beforeEach, describe, it } from "node:test";
+import { createRoot, type Root } from "react-dom/client";
+import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
+import { PhoneApp } from "../components/mobile/phone-app.tsx";
+import { setPhoneToken } from "../components/mobile/phone-auth.ts";
+import { httpStudyApi, PhoneApiError } from "../components/mobile/study-api.ts";
+import type { PhoneStudyApi } from "../components/mobile/study-api.ts";
+import type { StudyCardView, StudyCourseSummary, StudyNextResult } from "../src/core/index.ts";
+
+const store = new Map<string, string>();
+Object.assign(globalThis, {
+	localStorage: {
+		getItem: (k: string) => store.get(k) ?? null,
+		setItem: (k: string, v: string) => void store.set(k, v),
+		removeItem: (k: string) => void store.delete(k),
+	},
+});
+
+const originalFetch = globalThis.fetch;
+let root: Root | undefined;
+let host: HTMLDivElement | undefined;
+let replaced: string[] = [];
+
+beforeEach(() => {
+	store.clear();
+	replaced = [];
+});
+afterEach(async () => {
+	globalThis.fetch = originalFetch;
+	if (root) await act(async () => root!.unmount());
+	host?.remove();
+	root = host = undefined;
+});
+
+const $ = (testid: string) => document.querySelector(`[data-testid="${testid}"]`) as HTMLElement | null;
+const $$ = (testid: string) => [...document.querySelectorAll(`[data-testid="${testid}"]`)] as HTMLElement[];
+const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+const click = async (el: Element | null) => {
+	assert.ok(el, "element to click is there");
+	await act(async () => { (el as HTMLElement).click(); });
+	await settle();
+};
+async function mount(api: PhoneStudyApi) {
+	const router = { push: () => {}, replace: (href: string) => replaced.push(href), back: () => {}, forward: () => {}, refresh: () => {}, prefetch: () => {} };
+	host = document.createElement("div");
+	document.body.append(host);
+	root = createRoot(host);
+	await act(async () => root!.render(<AppRouterContext.Provider value={router as never}><PhoneApp api={api} /></AppRouterContext.Provider>));
+	await settle();
+}
+/** The phone's own `me` answer, so the paired name shows; everything else the screens ask goes to the fake engine. */
+const fakeMe = (name = "Test iPhone") => {
+	globalThis.fetch = (async (url: unknown) =>
+		String(url) === "/m-api/me" ? Response.json({ device: { id: "d1", name } }) : new Response("{}", { status: 404 })) as typeof fetch;
+};
+
+/** The HTML the card iframe shows right now. */
+const shownCard = (): string => {
+	const frame = document.querySelector("iframe") as (HTMLIFrameElement & { srcDoc?: string }) | null;
+	return frame?.getAttribute("srcdoc") ?? frame?.getAttribute("srcDoc") ?? frame?.srcDoc ?? "";
+};
+
+const course = (id: string, name: string, over: Partial<StudyCourseSummary> = {}): StudyCourseSummary => ({
+	id,
+	name,
+	daysLeft: null,
+	total: 10,
+	counts: { new: 3, learning: 1, review: 4 },
+	newQuota: 20,
+	...over,
+});
+const card = (id: string, over: Partial<StudyCardView> = {}): StudyCardView => ({
+	id,
+	kind: "basic",
+	bucket: "new",
+	core: false,
+	front: `<p>Front of ${id}</p>`,
+	back: `<p>Back of ${id}</p>`,
+	fields: { Front: `Front of ${id}`, Back: `Back of ${id}` },
+	siblings: 0,
+	split: false,
+	intervals: { 1: "1m", 2: "6m", 3: "10m", 4: "3d" },
+	...over,
+});
+const result = (courseId: string, c: StudyCardView | null, step: number, counts = { new: 2, learning: 1, review: 4 }): StudyNextResult => ({ courseId, counts, step, card: c });
+
+/** A scripted engine: `next` and every answer/undo get the next prepared result; every call is recorded. */
+function fakeApi(courses: StudyCourseSummary[], script: (StudyNextResult | Error)[]): PhoneStudyApi & { calls: string[]; bodies: unknown[] } {
+	const calls: string[] = [];
+	const bodies: unknown[] = [];
+	const take = (): StudyNextResult => {
+		const out = script.shift();
+		if (!out) throw new Error("script ran out");
+		if (out instanceof Error) throw out;
+		return out;
+	};
+	return {
+		calls,
+		bodies,
+		courses: async () => {
+			calls.push("courses");
+			return courses;
+		},
+		next: async (courseId, step, open) => {
+			calls.push(`next ${courseId} ${step}${open ? ` ${open}` : ""}`);
+			return take();
+		},
+		answer: async (input) => {
+			calls.push("answer");
+			bodies.push(input);
+			return take();
+		},
+		undo: async (input) => {
+			calls.push("undo");
+			bodies.push(input);
+			return take();
+		},
+	};
+}
+
+describe("the pairing guard", () => {
+	it("sends a phone without a key to the pairing page and shows nothing", async () => {
+		const api = fakeApi([course("a", "Anatomy")], []);
+		await mount(api);
+		assert.deepEqual(replaced, ["/m/pair"]);
+		assert.equal($("phone-courses"), null);
+		assert.deepEqual(api.calls, [], "no study call without a key");
+	});
+
+	it("sends it there too when the Mac says the key is gone", async () => {
+		setPhoneToken("KEY");
+		fakeMe();
+		const api = { ...fakeApi([], []), courses: async () => { throw new PhoneApiError("This phone is not paired (any more).", "unpaired"); } };
+		await mount(api);
+		assert.deepEqual(replaced, ["/m/pair"]);
+	});
+});
+
+describe("the course list", () => {
+	it("lists the courses with their counts and the exam countdown, and names the phone", async () => {
+		setPhoneToken("KEY");
+		fakeMe("Danny's iPhone");
+		await mount(fakeApi([course("a", "Anatomy", { daysLeft: 39 }), course("b", "Biochemistry", { total: 1, daysLeft: 1, counts: { new: 0, learning: 0, review: 0 } })], []));
+		const rows = $$("phone-course");
+		assert.equal(rows.length, 2);
+		assert.match(rows[0]!.textContent ?? "", /Anatomy/);
+		assert.match(rows[0]!.textContent ?? "", /10 cards · exam in 39 days/);
+		assert.match(rows[0]!.textContent ?? "", /314/, "new, learning, due");
+		assert.match(rows[1]!.textContent ?? "", /1 cards · exam in 1 day$|exam in 1 day(?!s)/);
+		assert.match($("phone-courses")!.textContent ?? "", /Danny's iPhone/);
+	});
+
+	it("says so when there is nothing to study, and when the Mac cannot be reached", async () => {
+		setPhoneToken("KEY");
+		fakeMe();
+		await mount(fakeApi([], []));
+		assert.ok($("phone-empty"));
+		await act(async () => root!.unmount());
+		host!.remove();
+		const api = { ...fakeApi([], []), courses: async () => { throw new PhoneApiError("Cannot reach your Mac.", "unreachable"); } };
+		await mount(api);
+		assert.match($("phone-error")!.textContent ?? "", /Cannot reach your Mac/);
+		assert.deepEqual(replaced, [], "unreachable is not unpaired");
+	});
+
+	it("refreshes on request", async () => {
+		setPhoneToken("KEY");
+		fakeMe();
+		const api = fakeApi([course("a", "Anatomy")], []);
+		await mount(api);
+		await click($("phone-refresh"));
+		assert.equal(api.calls.filter((c) => c === "courses").length, 2);
+	});
+});
+
+describe("a session", () => {
+	async function open(script: (StudyNextResult | Error)[]) {
+		setPhoneToken("KEY");
+		fakeMe();
+		const api = fakeApi([course("a", "Anatomy")], script);
+		await mount(api);
+		await click($("phone-course"));
+		return api;
+	}
+
+	it("starts at step 0, shows the front, and reveals the answer buttons with their intervals", async () => {
+		const api = await open([result("a", card("c1"), 0)]);
+		assert.deepEqual(api.calls.filter((c) => c.startsWith("next")), ["next a 0"]);
+		assert.ok($("phone-session"));
+		assert.equal($("phone-grade-1"), null, "grades only after the answer is up");
+		assert.equal(shownCard().includes("Front of c1"), true);
+		await click($("phone-reveal"));
+		assert.deepEqual([1, 2, 3, 4].map((g) => $(`phone-grade-${g}`)!.textContent), ["1mAgain", "6mHard", "10mGood", "3dEasy"]);
+		assert.equal(shownCard().includes("Back of c1"), true);
+		assert.equal($("phone-reveal"), null);
+	});
+
+	it("sends the grade with the card, the course, the time and the step, then shows the next card front side up", async () => {
+		const api = await open([result("a", card("c1"), 0), result("a", card("c2"), 1, { new: 1, learning: 1, review: 4 })]);
+		await click($("phone-reveal"));
+		await click($("phone-grade-3"));
+		const sent = api.bodies[0] as Record<string, unknown>;
+		assert.deepEqual({ courseId: sent.courseId, cardId: sent.cardId, grade: sent.grade, step: sent.step }, { courseId: "a", cardId: "c1", grade: 3, step: 0 });
+		assert.equal(typeof sent.ms, "number");
+		assert.equal(shownCard().includes("Front of c2"), true);
+		assert.ok($("phone-reveal"), "front side again");
+		assert.match($("phone-session-counts")!.textContent ?? "", /114/);
+	});
+
+	it("takes the latest answer back: the card is shown again at its step", async () => {
+		const api = await open([result("a", card("c1"), 0), result("a", card("c2"), 1), result("a", card("c1"), 0)]);
+		assert.equal($("phone-undo")!.hasAttribute("disabled"), true, "nothing to undo yet");
+		await click($("phone-reveal"));
+		await click($("phone-grade-2"));
+		assert.equal($("phone-undo")!.hasAttribute("disabled"), false);
+		await click($("phone-undo"));
+		assert.deepEqual(api.bodies[1], { courseId: "a", cardId: "c1", step: 0 });
+		assert.equal(shownCard().includes("Front of c1"), true);
+		assert.equal($("phone-undo")!.hasAttribute("disabled"), true);
+	});
+
+	it("is done when no card is left, counts the answers, and goes back to a refreshed list", async () => {
+		const api = await open([result("a", card("c1"), 0), result("a", null, 1, { new: 0, learning: 0, review: 0 })]);
+		await click($("phone-reveal"));
+		await click($("phone-grade-4"));
+		assert.match($("phone-done")!.textContent ?? "", /Done for today\.1 card answered\./);
+		const before = api.calls.filter((c) => c === "courses").length;
+		await click($("phone-done-back"));
+		assert.ok($("phone-courses"));
+		assert.equal(api.calls.filter((c) => c === "courses").length, before + 1);
+	});
+
+	it("shows a failed answer in a banner and keeps the card", async () => {
+		await open([result("a", card("c1"), 0), new PhoneApiError("Cannot reach your Mac.", "unreachable")]);
+		await click($("phone-reveal"));
+		await click($("phone-grade-3"));
+		assert.match($("phone-error")!.textContent ?? "", /Cannot reach your Mac/);
+		assert.ok($("phone-grade-3"), "still on the same card, answers up");
+		assert.equal($("phone-retry"), null, "retry is for a session that never started");
+	});
+
+	it("offers Retry when the first card cannot be fetched", async () => {
+		const api = await open([new PhoneApiError("Cannot reach your Mac.", "unreachable"), result("a", card("c1"), 0)]);
+		assert.match($("phone-error")!.textContent ?? "", /Cannot reach your Mac/);
+		await click($("phone-retry"));
+		assert.equal($("phone-error"), null);
+		assert.ok($("phone-reveal"));
+		assert.deepEqual(api.calls.filter((c) => c.startsWith("next")), ["next a 0", "next a 0"]);
+	});
+
+	it("goes to the pairing page when the key is dropped mid-session", async () => {
+		await open([result("a", card("c1"), 0), new PhoneApiError("This phone is not paired (any more).", "unpaired")]);
+		await click($("phone-reveal"));
+		await click($("phone-grade-3"));
+		assert.deepEqual(replaced, ["/m/pair"]);
+	});
+
+	it("labels an MCQ's button Check", async () => {
+		await open([result("a", card("m1", { kind: "mcq", fields: { Q: "q", Answers: "A" } }), 0)]);
+		assert.match($("phone-reveal")!.textContent ?? "", /Check/);
+	});
+});
+
+describe("the online engine", () => {
+	function server(answer: (url: string, init?: RequestInit) => Response | Promise<Response>) {
+		const seen: { url: string; method: string; auth: string | null; body: unknown }[] = [];
+		globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+			const url = String(input);
+			seen.push({ url, method: init?.method ?? "GET", auth: new Headers(init?.headers).get("Authorization"), body: init?.body ? JSON.parse(String(init.body)) : null });
+			return answer(url, init);
+		}) as typeof fetch;
+		return seen;
+	}
+
+	it("maps the calls onto the Mac's study routes, with the phone's key", async () => {
+		setPhoneToken("KEY123");
+		const seen = server((url) => (url.startsWith("/api/study/courses") ? Response.json({ courses: [course("a", "A")] }) : Response.json(result("a", null, 1))));
+		const api = httpStudyApi();
+		assert.equal((await api.courses())[0]!.id, "a");
+		await api.next("a b", 2, "c 1");
+		await api.answer({ courseId: "a", cardId: "c1", grade: 3, ms: 1200, step: 2 });
+		await api.undo({ courseId: "a", cardId: "c1", step: 2 });
+		assert.deepEqual(
+			seen.map((s) => [s.method, s.url, s.auth]),
+			[
+				["GET", "/api/study/courses", "Bearer KEY123"],
+				["GET", "/api/study/next?course=a%20b&step=2&card=c%201", "Bearer KEY123"],
+				["POST", "/api/study/answer", "Bearer KEY123"],
+				["POST", "/api/study/undo", "Bearer KEY123"],
+			],
+		);
+		assert.deepEqual(seen[2]!.body, { courseId: "a", cardId: "c1", grade: 3, ms: 1200, step: 2 });
+	});
+
+	it("tells unpaired, unreachable and server failures apart", async () => {
+		setPhoneToken("KEY123");
+		const kinds = async (answer: Response | Error) => {
+			server(() => {
+				if (answer instanceof Error) throw answer;
+				return answer.clone();
+			});
+			try {
+				await httpStudyApi().next("a", 0);
+				return "ok";
+			} catch (e) {
+				return e instanceof PhoneApiError ? `${e.kind}: ${e.message}` : "other";
+			}
+		};
+		assert.match(await kinds(new Response("{}", { status: 401 })), /^unpaired/);
+		assert.match(await kinds(new Response("{}", { status: 502 })), /^unreachable/);
+		assert.match(await kinds(new TypeError("Failed to fetch")), /^unreachable: Cannot reach your Mac/);
+		assert.equal(await kinds(new Response(JSON.stringify({ error: "Unknown course" }), { status: 404 })), "server: Unknown course");
+		assert.equal(await kinds(new Response("nope", { status: 500 })), "server: Request failed (500)");
+	});
+});

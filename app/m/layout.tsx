@@ -4,7 +4,11 @@ import type { Metadata, Viewport } from "next";
 export const metadata: Metadata = {
 	title: "Learnbox",
 	description: "Learnbox on your phone",
+	manifest: "/m/manifest.webmanifest",
+	icons: { apple: "/m/apple-touch-icon.png", icon: "/m/icon-192.png" },
 	appleWebApp: { capable: true, title: "Learnbox", statusBarStyle: "black-translucent" },
+	// no phone-number / address auto-links inside cards
+	formatDetection: { telephone: false, address: false, email: false },
 };
 
 export const viewport: Viewport = {

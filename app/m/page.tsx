@@ -1,7 +1,7 @@
-import { PhoneHome } from "@/components/mobile/phone-home";
+import { PhoneApp } from "@/components/mobile/phone-app";
 
 export const dynamic = "force-static";
 
 export default function PhonePage() {
-	return <PhoneHome />;
+	return <PhoneApp />;
 }
