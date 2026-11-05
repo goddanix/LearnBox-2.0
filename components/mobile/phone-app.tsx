@@ -3,14 +3,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { StudyCourseSummary } from "@/src/core";
+import { buildPhoneBackup } from "@/src/core";
 import { keepAppForOffline } from "./offline-shell";
 import { getPhoneToken, phoneFetch } from "./phone-auth";
+import { readBackupFile, saveBackupFile } from "./phone-backup";
 import { PhoneCourses, PhoneSetup } from "./phone-courses";
 import { PhoneApiError } from "./phone-http";
 import { PhoneSession } from "./phone-session";
 import { openPhoneSource } from "./phone-source";
-import type { PhoneSource } from "./phone-source";
-import type { PullProgress, PullResult } from "./pull-deck";
+import type { PhoneSource, UpdateResult } from "./phone-source";
+import type { PullProgress } from "./pull-deck";
 
 /** The course in the address (`#/c/<id>`): a back swipe on the phone leaves the session, a reload keeps it. */
 const readHash = (): string | null => {
@@ -31,8 +33,9 @@ const writeHash = (courseId: string | null) => {
 };
 
 /** What an update did, in a sentence. */
-export function updateSummary(r: PullResult): string {
+export function updateSummary(r: UpdateResult): string {
 	const parts = [`${r.cards} card${r.cards === 1 ? "" : "s"}`];
+	if (r.sent > 0) parts.push(`${r.sent} answer${r.sent === 1 ? "" : "s"} sent to the Mac`);
 	if (r.reviews > 0) parts.push(`${r.reviews} new answer${r.reviews === 1 ? "" : "s"} from the Mac`);
 	if (r.media > 0) parts.push(`${r.media} picture${r.media === 1 ? "" : "s"}`);
 	const failed = r.mediaFailed > 0 ? ` ${r.mediaFailed} picture${r.mediaFailed === 1 ? "" : "s"} did not come; update again to retry.` : "";
@@ -55,6 +58,7 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 	const [error, setError] = useState<string | null>(null);
 	const [updating, setUpdating] = useState<PullProgress | null>(null);
 	const [updated, setUpdated] = useState<string | null>(null);
+	const [notice, setNotice] = useState<string | null>(null);
 	const sourceRef = useRef<PhoneSource | null>(null);
 	sourceRef.current = source;
 
@@ -123,6 +127,7 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 		if (!current || updating) return;
 		setError(null);
 		setUpdated(null);
+		setNotice(null);
 		setUpdating({ phase: "deck", done: 0, total: 1 });
 		try {
 			const { result, source: next } = await current.update(setUpdating);
@@ -138,6 +143,40 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 		}
 	}, [updating, loadCourses, onApiError]);
 
+	/** The answers only this phone has, handed to the share sheet. Runs inside the tap: nothing is awaited before the share. */
+	const saveBackup = () => {
+		const engine = sourceRef.current?.engine;
+		if (!engine) return;
+		setNotice(null);
+		const backup = buildPhoneBackup(engine.unsentReviews(), new Date(), deviceName ?? undefined);
+		void saveBackupFile(backup).then(
+			(how) => setNotice(how === "shared" ? "Backup handed over." : how === "downloaded" ? "Backup file downloaded." : null),
+			(e: unknown) => setNotice(`Could not save the backup: ${e instanceof Error ? e.message : String(e)}`),
+		);
+	};
+
+	/** A backup file picked on this phone: its answers join the ones waiting to be sent. */
+	const restoreBackup = async (file: File) => {
+		const current = sourceRef.current;
+		if (!current) return;
+		setNotice(null);
+		const read = await readBackupFile(file);
+		if (!read) {
+			setNotice("This is not a Learnbox phone backup file.");
+			return;
+		}
+		try {
+			const { added, source: next } = await current.restore(read.backup.reviews);
+			sourceRef.current = next;
+			setSource(next);
+			const total = read.backup.reviews.length;
+			setNotice(`Backup read: ${added} new answer${added === 1 ? "" : "s"}${total - added > 0 ? `, ${total - added} already here` : ""}${read.rejected > 0 ? `, ${read.rejected} unreadable skipped` : ""}.`);
+			await loadCourses();
+		} catch (e) {
+			setNotice(`Could not read the backup: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	};
+
 	if (!ready) return null;
 	if (fatal) return <p className="px-4 py-10 text-sm text-red-400" role="alert" data-testid="phone-error">{fatal}</p>;
 	if (!source) return <p className="px-4 py-10 text-sm text-muted-foreground">Loading…</p>;
@@ -152,7 +191,11 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 				api={engine.api}
 				course={course}
 				onError={onApiError}
+				unsent={engine.unsent}
+				onBackup={saveBackup}
+				notice={notice}
 				onExit={() => {
+					setNotice(null);
 					setCourseId(null);
 					writeHash(null);
 					void loadCourses();
@@ -169,6 +212,9 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 			unsent={engine.unsent()}
 			updating={updating}
 			updated={updated}
+			notice={notice}
+			onBackup={saveBackup}
+			onRestore={(file) => void restoreBackup(file)}
 			onPick={(c) => {
 				setCourseId(c.id);
 				writeHash(c.id);

@@ -119,15 +119,12 @@ export type MobileRouteClass = "public" | "device" | "deny";
 
 /**
  * Every phone-visible route, listed. Anything not here is `deny`, so a new Learnbox route is closed to the phone until
- * someone opens it on purpose. Slices add their routes here (10d sync, 10e card actions, 10f lessons).
+ * someone opens it on purpose. The phone studies from its own copy (10c), so it needs no study routes: it takes the
+ * deck and its media, and sends its answers back (10d). Slices add their routes here (10e card actions, 10f lessons).
  */
 const DEVICE_ROUTES: readonly { method: string; path: string }[] = [
-	{ method: "GET", path: "/api/study/courses" },
-	{ method: "GET", path: "/api/study/next" },
-	{ method: "GET", path: "/api/study/weak" },
-	{ method: "POST", path: "/api/study/answer" },
-	{ method: "POST", path: "/api/study/undo" },
 	{ method: "GET", path: "/api/phone/deck" },
+	{ method: "POST", path: "/api/phone/sync" },
 ];
 /** One media file by name: `/api/phone/media/<name>`, exactly one non-empty segment after the prefix. */
 const MEDIA_PREFIX = ["api", "phone", "media"];

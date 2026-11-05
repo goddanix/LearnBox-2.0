@@ -7,6 +7,7 @@
  * changes.
  */
 
+import { newReviews, reviewKey } from "@/src/core";
 import type { StudyCard, StudyCourse, StudyReview } from "@/src/core";
 
 /** What the phone remembers about its copy. */
@@ -47,6 +48,12 @@ export interface PhoneDb {
 	applyDeck(input: { meta: PhoneMeta; courses: readonly StudyCourse[]; cards: readonly StudyCard[]; macReviews: readonly StudyReview[] }): Promise<void>;
 	/** Answers given on the phone, kept until the Mac has them. */
 	addReviews(reviews: readonly StudyReview[]): Promise<void>;
+	/** The answers the Mac does not have yet, oldest first. */
+	unsentReviews(): Promise<StudyReview[]>;
+	/** The Mac has taken these in (matched by what the line is, not by position). */
+	markSent(reviews: readonly StudyReview[]): Promise<void>;
+	/** Answers from a backup file: the ones this phone does not hold yet are kept as not-yet-sent. Says how many were new. */
+	importReviews(reviews: readonly StudyReview[]): Promise<number>;
 	mediaNames(): Promise<string[]>;
 	putMedia(file: PhoneMediaFile): Promise<void>;
 	getMedia(names: readonly string[]): Promise<Map<string, PhoneMediaFile>>;
@@ -72,6 +79,16 @@ export function createMemoryPhoneDb(): PhoneDb {
 		},
 		addReviews: async (batch) => {
 			reviews.push(...batch.map((review): ReviewRow => ({ review, src: "phone", sent: false })));
+		},
+		unsentReviews: async () => reviews.filter((r) => !r.sent).map((r) => r.review),
+		markSent: async (batch) => {
+			const keys = new Set(batch.map(reviewKey));
+			reviews = reviews.map((r) => (!r.sent && keys.has(reviewKey(r.review)) ? { ...r, sent: true } : r));
+		},
+		importReviews: async (batch) => {
+			const fresh = newReviews(reviews.map((r) => r.review), batch);
+			reviews.push(...fresh.map((review): ReviewRow => ({ review, src: "phone", sent: false })));
+			return fresh.length;
 		},
 		mediaNames: async () => [...media.keys()],
 		putMedia: async (file) => void media.set(file.name, file),
@@ -145,6 +162,35 @@ function wrap(db: IDBDatabase): PhoneDb {
 			const done_ = done(tx);
 			for (const review of batch) tx.objectStore("reviews").add({ review, src: "phone", sent: false } satisfies ReviewRow);
 			await done_;
+		},
+		async unsentReviews() {
+			const tx = db.transaction("reviews", "readonly");
+			const rows = (await result(tx.objectStore("reviews").getAll())) as ReviewRow[];
+			return rows.filter((r) => !r.sent).map((r) => r.review);
+		},
+		async markSent(batch) {
+			if (batch.length === 0) return;
+			const keys = new Set(batch.map(reviewKey));
+			const tx = db.transaction("reviews", "readwrite");
+			const done_ = done(tx);
+			tx.objectStore("reviews").openCursor().onsuccess = (event) => {
+				const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;
+				if (!cursor) return;
+				const row = cursor.value as ReviewRow;
+				if (!row.sent && keys.has(reviewKey(row.review))) cursor.update({ ...row, sent: true } satisfies ReviewRow);
+				cursor.continue();
+			};
+			await done_;
+		},
+		async importReviews(batch) {
+			const rows = (await result(db.transaction("reviews", "readonly").objectStore("reviews").getAll())) as ReviewRow[];
+			const fresh = newReviews(rows.map((r) => r.review), batch);
+			if (fresh.length === 0) return 0;
+			const tx = db.transaction("reviews", "readwrite");
+			const done_ = done(tx);
+			for (const review of fresh) tx.objectStore("reviews").add({ review, src: "phone", sent: false } satisfies ReviewRow);
+			await done_;
+			return fresh.length;
 		},
 		async mediaNames() {
 			const tx = db.transaction("media", "readonly");

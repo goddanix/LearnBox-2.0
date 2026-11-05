@@ -32,6 +32,7 @@ export function ago(iso: string, now: Date = new Date()): string {
 
 /** What the update is doing, in words. */
 export function progressText(p: PullProgress): string {
+	if (p.phase === "send") return "Sending your answers…";
 	if (p.phase === "deck") return "Getting your cards…";
 	return p.total === 0 ? "Pictures are up to date." : `Getting pictures… ${p.done} / ${p.total}`;
 }
@@ -45,8 +46,11 @@ export function PhoneCourses({
 	unsent,
 	updating,
 	updated,
+	notice,
 	onPick,
 	onUpdate,
+	onBackup,
+	onRestore,
 }: {
 	courses: StudyCourseSummary[] | null;
 	error: string | null;
@@ -58,8 +62,14 @@ export function PhoneCourses({
 	updating: PullProgress | null;
 	/** What the last update did, in a sentence. */
 	updated: string | null;
+	/** What the last backup action did, in a sentence. */
+	notice: string | null;
 	onPick: (c: StudyCourseSummary) => void;
 	onUpdate: () => void;
+	/** Hand the answers only this phone has to the share sheet. */
+	onBackup: () => void;
+	/** Read a backup file's answers in. */
+	onRestore: (file: File) => void;
 }) {
 	return (
 		<main className="mx-auto flex min-h-dvh w-full max-w-xl flex-col gap-3 px-4 pb-10 pt-4" data-testid="phone-courses">
@@ -114,7 +124,29 @@ export function PhoneCourses({
 				<span>{updating ? progressText(updating) : `Cards from your Mac: ${ago(syncedAt)}.`}</span>
 				{updated && !updating && <span data-testid="phone-updated">{updated}</span>}
 				{unsent > 0 && <span data-testid="phone-unsent">{unsent} answer{unsent === 1 ? "" : "s"} only on this phone so far.</span>}
+				{notice && <span data-testid="phone-notice">{notice}</span>}
 			</p>
+			<div className="flex flex-wrap gap-2 text-sm">
+				{unsent > 0 && (
+					<button type="button" onClick={onBackup} className="flex h-11 items-center rounded-lg border px-4 active:bg-accent" data-testid="phone-backup">
+						Save backup file
+					</button>
+				)}
+				<label className="flex h-11 cursor-pointer items-center rounded-lg border px-4 active:bg-accent" data-testid="phone-restore">
+					Read backup file
+					<input
+						type="file"
+						accept="application/json,.json"
+						className="sr-only"
+						data-testid="phone-restore-input"
+						onChange={(e) => {
+							const file = e.target.files?.[0];
+							e.target.value = "";
+							if (file) onRestore(file);
+						}}
+					/>
+				</label>
+			</div>
 		</main>
 	);
 }

@@ -19,6 +19,8 @@ export interface PhoneEngine {
 	meta: PhoneMeta;
 	/** Answers given on this phone that the Mac does not have yet. */
 	unsent(): number;
+	/** Those answers themselves — at hand at once, so a backup can be handed over inside the tap that asks for it. */
+	unsentReviews(): StudyReview[];
 }
 
 /** `data:` URI for a media file; chunked, because one spread of a big array overflows the call stack. */
@@ -37,7 +39,7 @@ export async function startPhoneEngine(db: PhoneDb, now: () => Date = () => new 
 	const snap = await db.load();
 	if (!snap) return null;
 
-	let unsent = snap.reviews.filter((r) => !r.sent).length;
+	const unsentLines = snap.reviews.filter((r) => !r.sent).map((r) => r.review);
 	const pending: StudyReview[] = [];
 	const store = createMemoryStudyStore(
 		{ courses: snap.courses, cards: snap.cards, reviews: snap.reviews.map((r) => r.review) },
@@ -93,7 +95,7 @@ export async function startPhoneEngine(db: PhoneDb, now: () => Date = () => new 
 			const batch = pending.splice(0);
 			try {
 				await db.addReviews(batch);
-				unsent += batch.length;
+				unsentLines.push(...batch);
 			} catch {
 				throw new PhoneApiError("Could not save your answer on this phone.", "server");
 			}
@@ -107,5 +109,5 @@ export async function startPhoneEngine(db: PhoneDb, now: () => Date = () => new 
 		answer: (input) => run(input.courseId, () => studyAnswer(input, now(), deps)),
 		undo: (input) => run(input.courseId, () => studyUndo(input, now(), deps)),
 	};
-	return { api, meta: snap.meta, unsent: () => unsent };
+	return { api, meta: snap.meta, unsent: () => unsentLines.length, unsentReviews: () => [...unsentLines] };
 }

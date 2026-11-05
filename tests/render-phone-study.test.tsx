@@ -1,7 +1,7 @@
 /**
  * The phone's review screens (Learnbox 2.0, Slices 10b/10c), in a live linkedom page with the phone's source faked:
  * the course list, a session (show answer → grade → next card, undo, done), the pairing guard, the failure
- * banners, the first-run setup and the update from the Mac.
+ * banners, the first-run setup, the update from the Mac and the backup file.
  */
 import { dom } from "./helpers/linkedom-page.ts";
 import React, { act } from "react";
@@ -14,8 +14,7 @@ import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared
 import { PhoneApp, updateSummary } from "../components/mobile/phone-app.tsx";
 import { setPhoneToken } from "../components/mobile/phone-auth.ts";
 import { PhoneApiError } from "../components/mobile/phone-http.ts";
-import type { PhoneSource } from "../components/mobile/phone-source.ts";
-import type { PullResult } from "../components/mobile/pull-deck.ts";
+import type { PhoneSource, UpdateResult } from "../components/mobile/phone-source.ts";
 import type { PhoneStudyApi } from "../components/mobile/study-api.ts";
 import type { StudyCardView, StudyCourseSummary, StudyNextResult } from "../src/core/index.ts";
 
@@ -62,12 +61,15 @@ async function mount(source: PhoneSource | PhoneStudyApi) {
 	await settle();
 }
 const META = { v: 1 as const, deckAt: "2026-11-05T08:00:00.000Z", syncedAt: new Date(Date.now() - 5 * 60_000).toISOString(), macReviews: 0 };
-const RESULT: PullResult = { cards: 12, courses: 2, reviews: 0, media: 0, mediaFailed: 0 };
+const RESULT: UpdateResult = { cards: 12, courses: 2, reviews: 0, media: 0, mediaFailed: 0, sent: 0 };
+const LINES = [{ cardId: "c1", at: "2026-11-05T09:00:00.000Z", grade: 3 as const }, { cardId: "c2", at: "2026-11-05T09:01:00.000Z", grade: 4 as const }];
 /** A source whose engine is the scripted one; `update` is only there when a test expects it to be used. */
-function sourceOf(api: PhoneStudyApi | null, extra: { unsent?: number; update?: PhoneSource["update"] } = {}): PhoneSource {
+function sourceOf(api: PhoneStudyApi | null, extra: { unsent?: number; update?: PhoneSource["update"]; restore?: PhoneSource["restore"] } = {}): PhoneSource {
+	const lines = LINES.slice(0, extra.unsent ?? 0);
 	return {
-		engine: api ? { api, meta: META, unsent: () => extra.unsent ?? 0 } : null,
+		engine: api ? { api, meta: META, unsent: () => lines.length, unsentReviews: () => [...lines] } : null,
 		update: extra.update ?? (async () => { throw new Error("no update expected"); }),
+		restore: extra.restore ?? (async () => { throw new Error("no restore expected"); }),
 	};
 }
 /** The phone's own `me` answer, so the paired name shows; everything else the screens ask goes to the fake engine. */
@@ -183,9 +185,9 @@ describe("the course list", () => {
 	it("shows when the cards came from the Mac, and how many answers only this phone has", async () => {
 		setPhoneToken("KEY");
 		fakeMe();
-		await mount(sourceOf(fakeApi([course("a", "Anatomy")], []), { unsent: 3 }));
+		await mount(sourceOf(fakeApi([course("a", "Anatomy")], []), { unsent: 2 }));
 		assert.match($("phone-sync")!.textContent ?? "", /Cards from your Mac: 5 min ago\./);
-		assert.match($("phone-unsent")!.textContent ?? "", /^3 answers only on this phone so far\.$/);
+		assert.match($("phone-unsent")!.textContent ?? "", /^2 answers only on this phone so far\.$/);
 		await act(async () => root!.unmount());
 		host!.remove();
 		await mount(sourceOf(fakeApi([course("a", "Anatomy")], []), { unsent: 1 }));
@@ -208,7 +210,7 @@ describe("updating from the Mac", () => {
 			update: async (onProgress) => {
 				onProgress({ phase: "media", done: 2, total: 9 });
 				await gate;
-				return { result: { ...RESULT, media: 9, reviews: 2 }, source: sourceOf(next) };
+				return { result: { ...RESULT, media: 9, reviews: 2, sent: 3 }, source: sourceOf(next) };
 			},
 		});
 		await mount(first);
@@ -219,7 +221,7 @@ describe("updating from the Mac", () => {
 		await act(async () => finish());
 		await settle();
 		assert.equal($$("phone-course").length, 2);
-		assert.equal($("phone-updated")!.textContent, "Updated: 12 cards, 2 new answers from the Mac, 9 pictures.");
+		assert.equal($("phone-updated")!.textContent, "Updated: 12 cards, 3 answers sent to the Mac, 2 new answers from the Mac, 9 pictures.");
 		assert.equal($("phone-update")!.hasAttribute("disabled"), false);
 		assert.ok(next.calls.includes("courses"));
 	});
@@ -237,9 +239,115 @@ describe("updating from the Mac", () => {
 	});
 
 	it("says what an update did, in a sentence", () => {
-		assert.equal(updateSummary({ cards: 1, courses: 1, reviews: 0, media: 0, mediaFailed: 0 }), "Updated: 1 card.");
-		assert.equal(updateSummary({ cards: 3, courses: 1, reviews: 1, media: 1, mediaFailed: 0 }), "Updated: 3 cards, 1 new answer from the Mac, 1 picture.");
-		assert.equal(updateSummary({ cards: 3, courses: 1, reviews: 0, media: 4, mediaFailed: 2 }), "Updated: 3 cards, 4 pictures. 2 pictures did not come; update again to retry.");
+		assert.equal(updateSummary({ cards: 1, courses: 1, reviews: 0, media: 0, mediaFailed: 0, sent: 0 }), "Updated: 1 card.");
+		assert.equal(updateSummary({ cards: 3, courses: 1, reviews: 1, media: 1, mediaFailed: 0, sent: 1 }), "Updated: 3 cards, 1 answer sent to the Mac, 1 new answer from the Mac, 1 picture.");
+		assert.equal(updateSummary({ cards: 3, courses: 1, reviews: 0, media: 4, mediaFailed: 2, sent: 0 }), "Updated: 3 cards, 4 pictures. 2 pictures did not come; update again to retry.");
+	});
+});
+
+describe("the backup file", () => {
+	const fileOf = (text: string, name = "learnbox-backup.json") => new File([text], name, { type: "application/json" });
+	const pick = async (file: File) => {
+		const input = $("phone-restore-input") as HTMLInputElement;
+		Object.defineProperty(input, "files", { value: [file], configurable: true });
+		await act(async () => {
+			input.dispatchEvent(new window.Event("change", { bubbles: true }));
+		});
+		await settle();
+	};
+	let shared: File[] = [];
+	beforeEach(() => {
+		shared = [];
+		Object.assign(globalThis.navigator ?? {}, {});
+		Object.defineProperty(globalThis, "navigator", {
+			configurable: true,
+			value: { canShare: () => true, share: async (data: { files: File[] }) => void shared.push(...data.files) },
+		});
+	});
+
+	it("offers to save the answers only this phone has, and hands them to the share sheet with the phone's name", async () => {
+		setPhoneToken("KEY");
+		fakeMe("Danny's iPhone");
+		await mount(sourceOf(fakeApi([course("a", "Anatomy")], []), { unsent: 2 }));
+		await click($("phone-backup"));
+		assert.equal(shared.length, 1);
+		assert.match(shared[0]!.name, /^learnbox-backup-\d{4}-\d{2}-\d{2}-\d{4}\.json$/);
+		const saved = JSON.parse(await shared[0]!.text()) as { kind: string; device: string; reviews: unknown[] };
+		assert.deepEqual([saved.kind, saved.device, saved.reviews.length], ["learnbox-phone-backup", "Danny's iPhone", 2]);
+		assert.equal($("phone-notice")!.textContent, "Backup handed over.");
+	});
+
+	it("has nothing to save when the Mac has every answer", async () => {
+		setPhoneToken("KEY");
+		fakeMe();
+		await mount(sourceOf(fakeApi([course("a", "Anatomy")], []), { unsent: 0 }));
+		assert.equal($("phone-backup"), null);
+		assert.ok($("phone-restore"), "reading one in is always possible");
+	});
+
+	it("asks again at the end of a session, and hands the file over from there", async () => {
+		setPhoneToken("KEY");
+		fakeMe();
+		const script = [result("a", card("c1"), 0), result("a", null, 1, { new: 0, learning: 0, review: 0 })];
+		await mount(sourceOf(fakeApi([course("a", "Anatomy")], script), { unsent: 2 }));
+		await click($("phone-course"));
+		await click($("phone-reveal"));
+		await click($("phone-grade-3"));
+		assert.match($("phone-done-unsent")!.textContent ?? "", /2 answers only on this phone\. Save a backup file now\?/);
+		await click($("phone-done-backup"));
+		assert.equal(shared.length, 1);
+		assert.equal($("phone-done-notice")!.textContent, "Backup handed over.");
+	});
+
+	it("does not nag at the end of a session when everything is on the Mac", async () => {
+		setPhoneToken("KEY");
+		fakeMe();
+		await mount(sourceOf(fakeApi([course("a", "Anatomy")], [result("a", null, 0, { new: 0, learning: 0, review: 0 })]), { unsent: 0 }));
+		await click($("phone-course"));
+		assert.ok($("phone-done"));
+		assert.equal($("phone-done-unsent"), null);
+	});
+
+	it("says nothing when the learner closes the share sheet", async () => {
+		setPhoneToken("KEY");
+		fakeMe();
+		Object.defineProperty(globalThis, "navigator", {
+			configurable: true,
+			value: { canShare: () => true, share: async () => { throw new DOMException("closed", "AbortError"); } },
+		});
+		await mount(sourceOf(fakeApi([course("a", "Anatomy")], []), { unsent: 1 }));
+		await click($("phone-backup"));
+		assert.equal($("phone-notice"), null);
+	});
+
+	it("reads a picked backup file in and says how many answers were new", async () => {
+		setPhoneToken("KEY");
+		fakeMe();
+		let got: unknown[] = [];
+		const after = sourceOf(fakeApi([course("a", "Anatomy")], []), { unsent: 2 });
+		await mount(
+			sourceOf(fakeApi([course("a", "Anatomy")], []), {
+				restore: async (reviews) => {
+					got = [...reviews];
+					return { added: 1, source: after };
+				},
+			}),
+		);
+		const file = fileOf(JSON.stringify({ v: 1, kind: "learnbox-phone-backup", createdAt: "2026-11-05T10:00:00.000Z", reviews: [...LINES, { junk: true }] }));
+		await pick(file);
+		assert.equal(got.length, 2);
+		assert.equal($("phone-notice")!.textContent, "Backup read: 1 new answer, 1 already here, 1 unreadable skipped.");
+		assert.match($("phone-unsent")!.textContent ?? "", /^2 answers only on this phone/, "the courses are read again from the new source");
+	});
+
+	it("refuses a file that is not a Learnbox phone backup, and leaves the phone alone", async () => {
+		setPhoneToken("KEY");
+		fakeMe();
+		await mount(sourceOf(fakeApi([course("a", "Anatomy")], [])));
+		for (const text of ["not json", "{}", JSON.stringify({ v: 1, kind: "other", createdAt: "x", reviews: [] })]) {
+			await pick(fileOf(text));
+			assert.equal($("phone-notice")!.textContent, "This is not a Learnbox phone backup file.", text);
+		}
 	});
 });
 

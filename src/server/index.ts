@@ -13,6 +13,7 @@ export * from "./commit-positions.ts";
 export * from "./jobs.ts";
 export * from "./mobile.ts";
 export * from "./phone-deck.ts";
+export * from "./phone-sync.ts";
 export * from "./study.ts";
 export * from "./study-link.ts";
 export * from "./create.ts";

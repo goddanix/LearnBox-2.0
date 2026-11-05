@@ -103,7 +103,7 @@ describe("what the gateway lets through", () => {
 		}
 	});
 	it("asks the listed API routes for a paired phone", () => {
-		for (const [m, p] of [["GET", "/api/study/courses"], ["GET", "/api/study/next"], ["GET", "/api/study/weak"], ["POST", "/api/study/answer"], ["POST", "/api/study/undo"], ["GET", "/api/study/next/"], ["GET", "/api/phone/deck"], ["GET", "/api/phone/media/arm.png"], ["GET", "/api/phone/media/arm%20bone.png"]] as const) {
+		for (const [m, p] of [["GET", "/api/phone/deck"], ["GET", "/api/phone/deck/"], ["POST", "/api/phone/sync"], ["POST", "/api/phone/sync/"], ["GET", "/api/phone/media/arm.png"], ["GET", "/api/phone/media/arm%20bone.png"]] as const) {
 			assert.equal(mobileRoute(m, p), "device", `${m} ${p}`);
 		}
 	});
@@ -112,6 +112,8 @@ describe("what the gateway lets through", () => {
 			["GET", "/"], ["GET", "/study"], ["GET", "/settings"], ["GET", "/chat/new"], ["GET", "/create"],
 			["GET", "/api/settings/general"], ["PUT", "/api/settings/general"], ["GET", "/api/keys"], ["POST", "/api/keys"], ["GET", "/api/subscriptions"],
 			["GET", "/api/study/anki"], ["POST", "/api/study/anki/import"], ["POST", "/api/study/courses"], ["POST", "/api/study/card"],
+				["GET", "/api/study/courses"], ["GET", "/api/study/next"], ["GET", "/api/study/weak"], ["POST", "/api/study/answer"], ["POST", "/api/study/undo"],
+				["GET", "/api/phone/sync"], ["POST", "/api/phone/backup"], ["POST", "/api/mobile/backup"], ["GET", "/api/mobile/backup"], ["POST", "/api/phone/sync/x"],
 			["GET", "/api/chats"], ["GET", "/api/create/jobs"], ["GET", "/api/library"], ["GET", "/api/mobile"], ["POST", "/api/mobile/pair"], ["GET", "/api/events"],
 			["GET", "/m-api/pair"], ["GET", "/mobile"], ["GET", "/mm"], ["GET", "/M"], ["GET", "/_next/static"], ["GET", "/_next/data/x.json"], ["GET", "/_next/image"], ["GET", "/fonts"], ["GET", "/fonts/"], ["POST", "/api/phone/deck"], ["GET", "/api/phone/deck/x"], ["GET", "/api/phone/media"], ["GET", "/api/phone/media/"], ["GET", "/api/phone/media/a/b.png"], ["POST", "/api/phone/media/a.png"], ["GET", "/api/phone/media/%2e%2e"], ["GET", "/api/phone/media/..%2fx"], ["GET", "/api/phone"], ["GET", "/fonts/a/b.ttf"], ["POST", "/fonts/cmunbx.ttf"], ["GET", "/siwc/x.js"], ["POST", "/sw.js"], ["GET", "/sw.js/x"], ["GET", "/SW.js"], ["GET", "/sw.js.map"],
 		] as const) {
@@ -121,16 +123,17 @@ describe("what the gateway lets through", () => {
 	it("allows only the listed methods", () => {
 		assert.equal(mobileRoute("POST", "/m/pair"), "deny");
 		assert.equal(mobileRoute("DELETE", "/m"), "deny");
-		assert.equal(mobileRoute("GET", "/api/study/answer"), "deny");
-		assert.equal(mobileRoute("POST", "/api/study/next"), "deny");
-		assert.equal(mobileRoute("PATCH", "/api/study/answer"), "deny");
-		assert.equal(mobileRoute("OPTIONS", "/api/study/next"), "deny");
+		assert.equal(mobileRoute("GET", "/api/phone/sync"), "deny");
+		assert.equal(mobileRoute("POST", "/api/phone/deck"), "deny");
+		assert.equal(mobileRoute("PATCH", "/api/phone/sync"), "deny");
+		assert.equal(mobileRoute("PUT", "/api/phone/sync"), "deny");
+		assert.equal(mobileRoute("OPTIONS", "/api/phone/deck"), "deny");
 	});
 	it("refuses a path that could be read two ways, instead of cleaning it up", () => {
 		for (const p of [
-			"/m/../api/keys", "/m/./pair", "/m/..", "/_next/static/../../api/keys", "//api/study/next", "/m//pair", "/api//study/next",
-			"/m/%2e%2e/api/keys", "/m/%2E%2E/api/keys", "/m/..%2fapi", "/m%2fpair", "/api/study%2fnext", "/m/a%5cb", "/m\\pair", "/m/a%00b", "/m/a\u0000b", "/m/a\nb",
-			"api/study/next", "", "*",
+			"/m/../api/keys", "/m/./pair", "/m/..", "/_next/static/../../api/keys", "//api/phone/deck", "/m//pair", "/api//phone/deck",
+			"/m/%2e%2e/api/keys", "/m/%2E%2E/api/keys", "/m/..%2fapi", "/m%2fpair", "/api/phone%2fdeck", "/m/a%5cb", "/m\\pair", "/m/a%00b", "/m/a\u0000b", "/m/a\nb",
+			"api/phone/deck", "", "*",
 		]) {
 			assert.equal(mobileRoute("GET", p), "deny", JSON.stringify(p));
 		}

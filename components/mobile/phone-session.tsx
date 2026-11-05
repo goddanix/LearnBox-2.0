@@ -18,7 +18,25 @@ const GRADES: { grade: StudyGrade; label: string; tone: string }[] = [
  * One course's review on the phone: the card fills the screen, the answer buttons sit under the thumb. Taps only —
  * no hover, no keyboard shortcuts — and every control is at least 44 points high.
  */
-export function PhoneSession({ api, course, onExit, onError }: { api: PhoneStudyApi; course: StudyCourseSummary; onExit: () => void; onError?: (e: unknown) => void }) {
+export function PhoneSession({
+	api,
+	course,
+	onExit,
+	onError,
+	unsent,
+	onBackup,
+	notice,
+}: {
+	api: PhoneStudyApi;
+	course: StudyCourseSummary;
+	onExit: () => void;
+	onError?: (e: unknown) => void;
+	/** Answers only this phone has, asked for when the session is done. */
+	unsent?: () => number;
+	/** Hand them to the share sheet. */
+	onBackup?: () => void;
+	notice?: string | null;
+}) {
 	const s = useStudySession(api, course.id, onError);
 	const { state, card } = s;
 	return (
@@ -62,6 +80,22 @@ export function PhoneSession({ api, course, onExit, onError }: { api: PhoneStudy
 						{s.answered > 0 ? `${s.answered} card${s.answered === 1 ? "" : "s"} answered. ` : ""}
 						Nothing else is due in {course.name}.
 					</p>
+					{unsent && onBackup && unsent() > 0 && (
+						<div className="flex flex-col items-center gap-2 rounded-xl border p-3" data-testid="phone-done-unsent">
+							<p className="text-sm">
+								{unsent()} answer{unsent() === 1 ? "" : "s"} only on this phone. Save a backup file now?
+							</p>
+							<button type="button" onClick={onBackup} className="h-11 rounded-lg bg-foreground px-5 text-sm font-medium text-background active:opacity-80" data-testid="phone-done-backup">
+								Save backup file
+							</button>
+							<p className="text-xs text-muted-foreground">Or update when your Mac is reachable: the answers go there.</p>
+						</div>
+					)}
+					{notice && (
+						<p className="text-sm text-muted-foreground" data-testid="phone-done-notice">
+							{notice}
+						</p>
+					)}
 					<button type="button" onClick={onExit} className="mt-2 h-12 rounded-xl border px-6 text-base active:bg-accent" data-testid="phone-done-back">
 						Back to courses
 					</button>

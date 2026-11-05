@@ -113,3 +113,32 @@ export interface PhoneDeck {
 	reviewsTotal: number;
 	media: PhoneMediaEntry[];
 }
+
+// ─── answers going back to the Mac (Slice 10d) ───────────────────────────────
+
+export const PHONE_BACKUP_SCHEMA = 1;
+export const PHONE_BACKUP_KIND = "learnbox-phone-backup";
+
+/** The file the phone saves: the answers the Mac does not have yet. Importable on the phone and on the Mac. */
+export interface PhoneBackup {
+	v: typeof PHONE_BACKUP_SCHEMA;
+	kind: typeof PHONE_BACKUP_KIND;
+	createdAt: string;
+	/** The phone's name, for the learner's own eyes. */
+	device?: string;
+	reviews: StudyReview[];
+}
+
+/** What the Mac did with review lines it was sent (POST /api/phone/sync) or read from a backup file. */
+export interface PhoneSyncResult {
+	/** Lines new to the ledger, now in it. */
+	added: number;
+	/** Lines the ledger already held. */
+	known: number;
+	/** Lines for cards that no longer exist. */
+	unknownCards: number;
+	/** Entries that were not review lines. */
+	rejected: number;
+	/** Lines in the ledger now: the phone asks for the deck from here next time. */
+	reviewsTotal: number;
+}

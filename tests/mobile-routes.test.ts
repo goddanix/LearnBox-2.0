@@ -188,13 +188,13 @@ describe("pairing a phone, end to end", () => {
 		// through the real listener to the fake Next server
 		const shell = await viaGateway("GET", "/m/pair", { headers: { "X-LearnHarness-Desktop": "forged" } });
 		assert.deepEqual([shell.status, shell.text, upstreamSeen[0]!["x-learnharness-desktop"]], [200, "shell", SECRET]);
-		assert.equal((await viaGateway("GET", "/api/study/next", { headers: { Authorization: `Bearer ${token}` } })).status, 200);
+		assert.equal((await viaGateway("GET", "/api/phone/deck", { headers: { Authorization: `Bearer ${token}` } })).status, 200);
 		assert.equal((await viaGateway("GET", "/api/keys", { headers: { Authorization: `Bearer ${token}` } })).status, 404);
 
 		const devices = await import("../app/api/mobile/devices/[id]/route.ts");
 		const id = list[0]!.id;
 		assert.equal((await devices.POST(new Request("http://localhost/x"), ctx(id))).status, 200);
-		assert.equal((await viaGateway("GET", "/api/study/next", { headers: { Authorization: `Bearer ${token}` } })).status, 401);
+		assert.equal((await viaGateway("GET", "/api/phone/deck", { headers: { Authorization: `Bearer ${token}` } })).status, 401);
 		assert.equal((await status()).devices[0]!.revoked, true);
 		assert.equal((await devices.DELETE(new Request("http://localhost/x"), ctx(id))).status, 204);
 		assert.deepEqual((await status()).devices, []);

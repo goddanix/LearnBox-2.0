@@ -168,6 +168,52 @@ describe("Settings → Phone", () => {
 		await click($("phone-serve"));
 		assert.match($("phone-error")!.textContent ?? "", /Switch on HTTPS first/);
 	});
+
+	describe("a backup file from a phone (Slice 10d)", () => {
+		const pick = async (file: { size: number; text: () => Promise<string> }) => {
+			const input = $("phone-backup-input")!;
+			Object.defineProperty(input, "files", { value: [file], configurable: true });
+			await act(async () => { input.dispatchEvent(new dom.window.Event("change", { bubbles: true })); });
+			await settle();
+		};
+		const asFile = (text: string, size = text.length) => ({ size, text: async () => text });
+		const FILE = { v: 1, kind: "learnbox-phone-backup", createdAt: "2026-11-05T20:00:00.000Z", reviews: [{ cardId: "c1", at: "2026-11-05T19:00:00.000Z", grade: 3 }] };
+
+		it("is posted as it is, and the summary of what the Mac took in is shown", async () => {
+			const server = fakeServer(STATUS, { "POST /api/mobile/backup": () => ({ added: 3, known: 1, unknownCards: 0, rejected: 2, reviewsTotal: 40 }) });
+			await mount(<PhoneSection />);
+			assert.equal($("phone-backup-note"), null);
+			await pick(asFile(JSON.stringify(FILE)));
+			assert.deepEqual(server.sent.find((s) => s.url === "/api/mobile/backup")?.body, FILE);
+			assert.equal($("phone-backup-note")!.textContent, "3 new answers taken in, 1 already there, 2 unreadable lines skipped.");
+			assert.equal($("phone-error"), null);
+		});
+
+		it("is refused on the spot when it is not JSON or far too big — nothing is sent", async () => {
+			const server = fakeServer(STATUS);
+			await mount(<PhoneSection />);
+			await pick(asFile("not json {"));
+			assert.match($("phone-error")!.textContent ?? "", /not a Learnbox phone backup file/);
+			await pick(asFile(JSON.stringify(FILE), 21 * 1024 * 1024));
+			assert.match($("phone-error")!.textContent ?? "", /not a Learnbox phone backup file/);
+			assert.ok(!server.sent.some((s) => s.url === "/api/mobile/backup"));
+		});
+
+		it("shows the Mac's message when it is JSON but not a backup, and clears an old summary", async () => {
+			let answer: () => Response = () => Response.json({ added: 1, known: 0, unknownCards: 0, rejected: 0, reviewsTotal: 1 });
+			const inner = fakeServer(STATUS);
+			const base = globalThis.fetch;
+			globalThis.fetch = (async (input: unknown, init?: RequestInit) => (String(input) === "/api/mobile/backup" ? answer() : base(input as RequestInfo, init))) as typeof fetch;
+			void inner;
+			await mount(<PhoneSection />);
+			await pick(asFile(JSON.stringify(FILE)));
+			assert.match($("phone-backup-note")!.textContent ?? "", /1 new answer taken in/);
+			answer = () => new Response(JSON.stringify({ error: "This is not a Learnbox phone backup file." }), { status: 400 });
+			await pick(asFile("{}"));
+			assert.equal($("phone-backup-note"), null, "the old summary is gone");
+			assert.match($("phone-error")!.textContent ?? "", /not a Learnbox phone backup file/);
+		});
+	});
 });
 
 describe("the shell switch", () => {
@@ -221,7 +267,7 @@ describe("the phone's key", () => {
 			seen = new Headers(init?.headers).get("Authorization");
 			return new Response("{}", { status: 401 });
 		}) as typeof fetch;
-		const res = await phoneFetch("/api/study/courses");
+		const res = await phoneFetch("/api/phone/deck");
 		assert.equal(seen, "Bearer KEY123");
 		assert.equal(res.status, 401);
 		assert.equal(getPhoneToken(), null);

@@ -10,7 +10,8 @@ import type { PhoneDb, PhoneMeta } from "./phone-db";
 import { PhoneApiError, phoneCall, phoneJson } from "./phone-http";
 
 export interface PullProgress {
-	phase: "deck" | "media";
+	/** send: the phone's answers go to the Mac first (see push-reviews.ts). */
+	phase: "send" | "deck" | "media";
 	done: number;
 	total: number;
 }

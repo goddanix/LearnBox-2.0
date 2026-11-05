@@ -4,17 +4,21 @@
  *
  * Top to bottom the learner does it in order: switch phone access on (the gateway starts), let Tailscale share it
  * (one button that runs `tailscale serve` — the exact command is shown), show a pairing code and QR code, type the
- * code into the phone, and see (and lock) the paired phones. Nothing here runs a command on its own.
+ * code into the phone, and see (and lock) the paired phones. Nothing here runs a command on its own. A backup file
+ * saved on a phone (Slice 10d) is read in at the bottom: the answers it holds are taken into the ledger, once.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { postJson, studyApi } from "@/components/study/api";
-import { formatPairingCode } from "@/src/core";
-import type { MobileDeviceSummary, MobileStatus, PairingOffer } from "@/src/core";
+import { formatPairingCode, syncSummary } from "@/src/core";
+import type { MobileDeviceSummary, MobileStatus, PairingOffer, PhoneSyncResult } from "@/src/core";
 import { SettingsGroup, SettingsRow, Toggle } from "./controls.tsx";
 
 const ADMIN_DNS = "https://login.tailscale.com/admin/dns";
+
+/** A backup file is a few lines per answer; anything much bigger is not one of ours. */
+const MAX_BACKUP_BYTES = 20 * 1024 * 1024;
 
 /** The QR code as one SVG path (dark modules as 1×1 squares) with the quiet zone the scanner needs. */
 function Qr({ rows }: { rows: string[] }) {
@@ -59,6 +63,7 @@ export function PhoneSection() {
 	const offer = shown?.offer ?? null;
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [backupNote, setBackupNote] = useState<string | null>(null);
 
 	const load = useCallback(async () => {
 		try {
@@ -115,6 +120,21 @@ export function PhoneSection() {
 			const res = await fetch(`/api/mobile/devices/${encodeURIComponent(d.id)}`, { method: "DELETE" });
 			if (!res.ok) throw new Error(`Could not remove the phone (${res.status})`);
 		});
+
+	const readBackup = (file: File) =>
+		act(
+			async () => {
+				if (file.size > MAX_BACKUP_BYTES) throw new Error("This is not a Learnbox phone backup file.");
+				let parsed: unknown;
+				try {
+					parsed = JSON.parse(await file.text());
+				} catch {
+					throw new Error("This is not a Learnbox phone backup file.");
+				}
+				return studyApi<PhoneSyncResult>("/api/mobile/backup", postJson(parsed));
+			},
+			(result) => setBackupNote(syncSummary(result)),
+		);
 
 	if (!status) {
 		return error ? (
@@ -211,6 +231,32 @@ export function PhoneSection() {
 						</span>
 					</SettingsRow>
 				))}
+			</SettingsGroup>
+
+			<SettingsGroup label="Backup file" testid="phone-backup-group">
+				<SettingsRow label="Read a backup file" hint="The file a phone saved with “Save backup file”: the answers the Mac did not get are taken in. Reading the same file twice adds nothing.">
+					<label className="inline-flex h-7 cursor-pointer items-center rounded-lg border px-2.5 text-[0.8rem] hover:bg-muted" data-testid="phone-backup-pick">
+						Choose file…
+						<input
+							type="file"
+							accept="application/json,.json"
+							className="sr-only"
+							disabled={busy}
+							data-testid="phone-backup-input"
+							onChange={(e) => {
+								const file = e.target.files?.[0];
+								e.target.value = "";
+								setBackupNote(null);
+								if (file) void readBackup(file);
+							}}
+						/>
+					</label>
+				</SettingsRow>
+				{backupNote && (
+					<p className="text-xs text-muted-foreground" role="status" data-testid="phone-backup-note">
+						{backupNote}
+					</p>
+				)}
 			</SettingsGroup>
 		</div>
 	);

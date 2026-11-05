@@ -1,7 +1,8 @@
 /**
- * The phone's storage, study engine and update from the Mac (Learnbox 2.0, Slice 10c): the calls to the Mac and the
- * three ways they fail, the in-memory `PhoneDb`, the engine over it (offline studying, answers kept until the Mac has
- * them, pictures read from storage), and `pullDeck` against a fake Mac.
+ * The phone's storage, study engine and update from the Mac (Learnbox 2.0, Slices 10c/10d): the calls to the Mac and
+ * the three ways they fail, the in-memory `PhoneDb`, the engine over it (offline studying, answers kept until the Mac
+ * has them, pictures read from storage), `pullDeck` against a fake Mac, and the answers going back (`pushReviews`,
+ * the update as a whole, a backup file's round trip).
  */
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
@@ -10,11 +11,14 @@ import type { PhoneDb, PhoneMeta } from "../components/mobile/phone-db.ts";
 import { startPhoneEngine, toDataUri } from "../components/mobile/phone-engine.ts";
 import { PhoneApiError, phoneJson } from "../components/mobile/phone-http.ts";
 import { getPhoneToken, setPhoneToken } from "../components/mobile/phone-auth.ts";
+import { sourceOver } from "../components/mobile/phone-source.ts";
 import { pullDeck } from "../components/mobile/pull-deck.ts";
 import type { PullProgress } from "../components/mobile/pull-deck.ts";
+import { pushReviews } from "../components/mobile/push-reviews.ts";
 import type { StudyCard, StudyCourse, StudyReview } from "../src/core/contracts/study.ts";
 import { createMemoryStudyStore } from "../src/core/memory-study-store.ts";
 import { buildPhoneDeck } from "../src/core/phone-deck.ts";
+import { acceptPhoneReviews, buildPhoneBackup, readPhoneBackup } from "../src/core/phone-sync.ts";
 
 const NOW = new Date(2026, 10, 4, 10, 0, 0);
 const course = (id: string): StudyCourse => ({ id, name: id, bufferDays: 5, createdAt: NOW.toISOString() });
@@ -195,10 +199,14 @@ describe("taking the Mac's deck onto the phone", () => {
 		const asked: string[] = [];
 		const store = createMemoryStudyStore({ courses: [course("k1")], cards: init.cards, reviews: init.reviews ?? [] });
 		const files = init.media ?? {};
-		globalThis.fetch = (async (input: unknown) => {
+		globalThis.fetch = (async (input: unknown, request?: RequestInit) => {
 			const url = String(input);
 			asked.push(url);
 			if (init.down) throw new TypeError("Failed to fetch");
+			if (url === "/api/phone/sync" && request?.method === "POST") {
+				const sent = (JSON.parse(String(request.body)) as { reviews: unknown }).reviews;
+				return Response.json(acceptPhoneReviews(store, sent));
+			}
 			if (url.startsWith("/api/phone/deck?reviewsFrom=")) {
 				const from = Number(new URL(url, "http://x").searchParams.get("reviewsFrom"));
 				return Response.json(buildPhoneDeck(store, (n) => (files[n] ? files[n]!.byteLength : null), from, NOW));
@@ -317,5 +325,168 @@ describe("taking the Mac's deck onto the phone", () => {
 		};
 		mac({ cards: [card("1")] });
 		await assert.rejects(pullDeck(db, undefined, () => NOW), (e) => e instanceof PhoneApiError && /its storage full/.test(e.message));
+	});
+});
+
+describe("the phone's answers on their way to the Mac", () => {
+	/** The same fake Mac as above, in this scope: a store the test can look into and the requests it got. */
+	function macWith(cards: StudyCard[], reviews: StudyReview[] = []) {
+		const store = createMemoryStudyStore({ courses: [course("k1")], cards, reviews });
+		const posts: number[] = [];
+		const asked: string[] = [];
+		let down = false;
+		globalThis.fetch = (async (input: unknown, request?: RequestInit) => {
+			const url = String(input);
+			asked.push(url);
+			if (down) throw new TypeError("Failed to fetch");
+			if (url === "/api/phone/sync") {
+				const sent = (JSON.parse(String(request!.body)) as { reviews: unknown[] }).reviews;
+				posts.push(sent.length);
+				return Response.json(acceptPhoneReviews(store, sent));
+			}
+			if (url.startsWith("/api/phone/deck?reviewsFrom=")) return Response.json(buildPhoneDeck(store, () => null, Number(new URL(url, "http://x").searchParams.get("reviewsFrom")), NOW));
+			return new Response("{}", { status: 404 });
+		}) as typeof fetch;
+		return { store, posts, asked, goDown: () => (down = true), comeUp: () => (down = false) };
+	}
+	const answered = async (db: PhoneDb, n: number) => {
+		const engine = (await startPhoneEngine(db, () => NOW))!;
+		for (let i = 0; i < n; i++) {
+			const next = await engine.api.next("k1", i);
+			await engine.api.answer({ courseId: "k1", cardId: next.card!.id, grade: 3, ms: 100, step: next.step });
+		}
+		return engine;
+	};
+
+	it("go in batches, are marked as sent once the Mac has them, and are not sent twice", async () => {
+		const cards = Array.from({ length: 4 }, (_, i) => card(`c${i}`));
+		const mac = macWith(cards);
+		const db = await phoneWith(cards);
+		await answered(db, 3);
+		assert.equal((await db.unsentReviews()).length, 3);
+		assert.equal(await pushReviews(db), 3);
+		assert.deepEqual(mac.posts, [3]);
+		assert.equal(mac.store.readReviews().length, 3);
+		assert.deepEqual(await db.unsentReviews(), []);
+		assert.equal(await pushReviews(db), 0);
+		assert.deepEqual(mac.posts, [3], "nothing left, so the Mac is not even asked");
+	});
+
+	it("are split into batches of two thousand", async () => {
+		const cards = [card("c1")];
+		const mac = macWith(cards);
+		const db = await phoneWith(cards);
+		await db.addReviews(Array.from({ length: 4500 }, (_, i) => review("c1", new Date(Date.UTC(2026, 10, 1) + i * 1000).toISOString())));
+		assert.equal(await pushReviews(db), 4500);
+		assert.deepEqual(mac.posts, [2000, 2000, 500]);
+		assert.equal(mac.store.readReviews().length, 4500);
+	});
+
+	it("stay unsent when the Mac cannot be reached, and go the next time", async () => {
+		const cards = [card("c1"), card("c2")];
+		const mac = macWith(cards);
+		const db = await phoneWith(cards);
+		await answered(db, 2);
+		mac.goDown();
+		await assert.rejects(pushReviews(db), (e) => e instanceof PhoneApiError && e.kind === "unreachable");
+		assert.equal((await db.unsentReviews()).length, 2);
+		mac.comeUp();
+		assert.equal(await pushReviews(db), 2);
+		assert.equal(mac.store.readReviews().length, 2);
+	});
+
+	it("are sent again without harm when the mark was lost: the Mac knows a line it holds", async () => {
+		const cards = [card("c1")];
+		const mac = macWith(cards);
+		const db = await phoneWith(cards);
+		await answered(db, 1);
+		const lines = await db.unsentReviews();
+		await pushReviews(db);
+		await db.addReviews(lines);
+		await pushReviews(db);
+		assert.equal(mac.store.readReviews().length, 1);
+	});
+
+	it("are not marked as sent when the Mac answers with something that is not its sync answer", async () => {
+		const db = await phoneWith([card("c1")]);
+		await answered(db, 1);
+		globalThis.fetch = (async () => Response.json({ hello: "world" })) as typeof fetch;
+		await assert.rejects(pushReviews(db), (e) => e instanceof PhoneApiError && /unexpected/.test(e.message));
+		assert.equal((await db.unsentReviews()).length, 1);
+	});
+
+	it("travel with the update: sent first, then the deck, and the phone ends up with nothing unsent", async () => {
+		const cards = [card("c1"), card("c2")];
+		const mac = macWith(cards, [review("c2", "2026-11-02T09:00:00.000Z")]);
+		const db = await phoneWith(cards);
+		const engine = await answered(db, 1);
+		const source = sourceOver(db, engine);
+		const progress: PullProgress[] = [];
+		const { result, source: next } = await source.update((p) => progress.push({ ...p }));
+		assert.equal(result.sent, 1);
+		assert.equal(result.reviews, 1, "and the Mac's own answer came the other way");
+		assert.equal(progress[0]!.phase, "send");
+		assert.ok(mac.asked.indexOf("/api/phone/sync") < mac.asked.findIndex((u) => u.startsWith("/api/phone/deck")), "answers first");
+		assert.equal(next.engine!.unsent(), 0);
+		assert.equal(mac.store.readReviews().length, 2);
+		assert.equal((await db.load())!.meta.macReviews, 2, "the Mac's ledger now holds its own line and the phone's");
+		// a second update has nothing to send and says nothing about sending
+		const again = await next.update((p) => progress.push({ ...p }));
+		assert.equal(again.result.sent, 0);
+		assert.deepEqual(mac.posts, [1]);
+	});
+
+	it("do not start the deck when they cannot be sent", async () => {
+		const cards = [card("c1")];
+		const mac = macWith(cards);
+		const db = await phoneWith(cards);
+		const engine = await answered(db, 1);
+		mac.goDown();
+		await assert.rejects(sourceOver(db, engine).update(() => {}), (e) => e instanceof PhoneApiError && e.kind === "unreachable");
+		mac.comeUp();
+		assert.ok(!mac.asked.some((u) => u.startsWith("/api/phone/deck")), "no deck request while the answers are stuck");
+		assert.equal((await db.unsentReviews()).length, 1);
+	});
+
+	it("update with nothing to send does not announce sending, and the first run has no engine to ask", async () => {
+		const mac = macWith([card("c1")]);
+		const progress: PullProgress[] = [];
+		const db = createMemoryPhoneDb();
+		const { result } = await sourceOver(db, null).update((p) => progress.push({ ...p }));
+		assert.equal(result.sent, 0);
+		assert.ok(progress.every((p) => p.phase !== "send"));
+		assert.ok(!mac.asked.includes("/api/phone/sync"));
+	});
+
+	it("survive the phone's storage being wiped: a backup file brings them back, once", async () => {
+		const cards = [card("c1"), card("c2")];
+		const db = await phoneWith(cards);
+		const engine = await answered(db, 2);
+		const file = JSON.parse(JSON.stringify(buildPhoneBackup(engine.unsentReviews(), NOW, "iPhone")));
+
+		// a fresh phone with the deck but without those answers
+		const fresh = await phoneWith(cards);
+		const read = readPhoneBackup(file)!;
+		const source = sourceOver(fresh, await startPhoneEngine(fresh, () => NOW));
+		const restored = await source.restore(read.backup.reviews);
+		assert.equal(restored.added, 2);
+		assert.equal(restored.source.engine!.unsent(), 2);
+		assert.equal((await restored.source.restore(read.backup.reviews)).added, 0, "reading the same file again adds nothing");
+
+		// and the Mac takes them in exactly once, whichever way they come
+		const mac = macWith(cards);
+		const { result } = await restored.source.update(() => {});
+		assert.equal(result.sent, 2);
+		assert.equal(mac.store.readReviews().length, 2);
+		assert.equal(acceptPhoneReviews(mac.store, file.reviews)!.added, 0, "the backup read on the Mac afterwards adds nothing either");
+	});
+
+	it("are kept apart from what the Mac's ledger gave: reading a backup never turns a Mac line into an unsent one", async () => {
+		const cards = [card("c1")];
+		const macLine = review("c1", "2026-11-02T09:00:00.000Z");
+		const db = await phoneWith(cards, [macLine]);
+		const source = sourceOver(db, await startPhoneEngine(db, () => NOW));
+		assert.equal((await source.restore([macLine])).added, 0);
+		assert.deepEqual(await db.unsentReviews(), []);
 	});
 });
