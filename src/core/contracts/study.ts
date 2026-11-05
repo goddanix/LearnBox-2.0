@@ -33,6 +33,8 @@ export interface StudyCourse {
 	topics?: string[];
 	/** Only these topics: pages about anything else are skipped. */
 	strictTopics?: boolean;
+	/** The prefix of the `medanki_id` of this course's notes in the Obsidian vault (default: the course id). A course carried over from MedAnki keeps its old id here, so its notes in the vault are updated, not written twice. */
+	vaultKey?: string;
 	createdAt: string;
 }
 

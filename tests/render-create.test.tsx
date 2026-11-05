@@ -7,6 +7,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { DraftCard } from "../components/create/draft-card.tsx";
 import { AddCardForm, CardEditor } from "../components/create/card-editor.tsx";
 import { CourseDetail } from "../components/create/course-detail.tsx";
+import { CourseNotes } from "../components/create/course-notes.tsx";
+import { NotePreview, noteBlocks } from "../components/create/note-preview.tsx";
 import { CoursesPanel } from "../components/create/courses-panel.tsx";
 import { DuplicatesPanel } from "../components/create/duplicates-panel.tsx";
 import { LegacyImport } from "../components/create/legacy-import.tsx";
@@ -139,6 +141,79 @@ describe("CourseDetail", () => {
 		assert.match(html, /data-testid="course-detail"/);
 		assert.match(html, /Back/);
 		assert.doesNotMatch(html, /course-topics/);
+	});
+});
+
+describe("CourseNotes", () => {
+	it("starts with what the notes are, that nothing goes into the vault unasked, and a disabled write button until the drafts are sorted", () => {
+		const html = renderToStaticMarkup(<CourseNotes course={course({ topics: ["Heart failure"], drafts: 0 })} />);
+		assert.match(html, /data-testid="course-notes"/);
+		assert.match(html, /Obsidian notes/);
+		assert.match(html, /nothing goes into your vault until you press “Save to Obsidian”/);
+		assert.match(html, /<button[^>]*disabled=""[^>]*data-testid="notes-write"|data-testid="notes-write"[^>]*disabled=""/);
+		assert.match(html, /Set the topics and sort the drafts into them first\./);
+		assert.doesNotMatch(html, /notes-save/, "nothing to save before notes are written");
+	});
+
+	it("offers to write the notes once there are topics and drafts, and to link the vault", () => {
+		const html = renderToStaticMarkup(<CourseNotes course={course({ topics: ["Heart failure"], drafts: 12 })} />);
+		assert.doesNotMatch(html, /<button[^>]*disabled=""[^>]*data-testid="notes-write"/);
+		assert.match(html, /Write the notes/);
+		assert.match(html, /data-testid="vault-link"/);
+		assert.match(html, /Verwandte Themen/);
+		assert.match(html, /Only notes this app wrote are changed/);
+	});
+});
+
+describe("NotePreview", () => {
+	const note = [
+		"[[Cardiology/Themen/00 Übersicht|↑ Cardiology · Themen]]",
+		"",
+		"> [!abstract] Kernaussagen",
+		"> - Heart failure is **common** ([[Lecture.pdf#page=3|Lecture · S. 3]])",
+		"",
+		"## Details",
+		"- First *point*",
+		"- Second point",
+		"",
+		"![[Heart-failure_D1_p003_F1.png|560]]",
+		"*Abb.: The failing heart* [[Lecture.pdf#page=3|Lecture · S. 3]]",
+		"",
+		"<script>alert(1)</script>",
+	].join("\n");
+
+	it("reads the note into boxes, headings, lists, pictures and paragraphs", () => {
+		assert.deepEqual(
+			noteBlocks(note).map((b) => b.kind),
+			["text", "callout", "heading", "list", "figure", "text", "text"],
+		);
+		const callout = noteBlocks(note)[1]!;
+		assert.ok(callout.kind === "callout" && callout.title === "Kernaussagen" && callout.items.length === 1);
+	});
+
+	it("draws bold, italic and page links as their label, and the picture from the note set", () => {
+		const html = renderToStaticMarkup(<NotePreview markdown={note} figureUrl={(f) => `/media/${f}`} />);
+		assert.match(html, /<b>common<\/b>/);
+		assert.match(html, /<i>point<\/i>/);
+		assert.match(html, /<span[^>]*>Lecture · S\. 3<\/span>/);
+		assert.match(html, /<img src="\/media\/Heart-failure_D1_p003_F1\.png"/);
+		assert.match(html, /Kernaussagen/);
+	});
+
+	it("draws a Markdown table as a table", () => {
+		const table = ["| Type | Ribs |", "|---|---|", "| Costae verae | I–VII |", "| **Costae spuriae** | VIII–X |"].join("\n");
+		const [block] = noteBlocks(table);
+		assert.ok(block?.kind === "table" && block.head.join() === "Type,Ribs" && block.rows.length === 2);
+		const html = renderToStaticMarkup(<NotePreview markdown={table} figureUrl={(f) => f} />);
+		assert.match(html, /<th[^>]*>Type<\/th>/);
+		assert.match(html, /<td[^>]*><b>Costae spuriae<\/b><\/td>/);
+		assert.doesNotMatch(html, /\|---\|/);
+	});
+
+	it("never injects the note's text as HTML", () => {
+		const html = renderToStaticMarkup(<NotePreview markdown={note} figureUrl={(f) => f} />);
+		assert.doesNotMatch(html, /<script>/);
+		assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
 	});
 });
 

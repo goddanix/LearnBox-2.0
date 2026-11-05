@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { studyApi as api, postJson } from "@/components/study/api";
+import { CourseNotes } from "@/components/create/course-notes";
 import { CardBody } from "@/components/create/draft-card";
 import { DuplicatesPanel } from "@/components/create/duplicates-panel";
 import type { AssignStatus, CourseDraft, CourseTag, CreateCourse, CreateJobSummary, TopicProposal, TopicsFromFile } from "@/src/core";
@@ -390,6 +391,7 @@ export function CourseDetail({
 							onChanged();
 						}}
 					/>
+					<CourseNotes course={course} />
 					<section className="flex flex-col gap-1.5" data-testid="course-jobs">
 						<h3 className="text-sm font-medium">PDFs of this course</h3>
 						{mine.length === 0 && <p className="text-sm text-muted-foreground">None yet. Make flashcards from a PDF and choose this course — or put an existing one here from its page.</p>}

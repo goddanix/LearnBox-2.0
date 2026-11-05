@@ -22,7 +22,7 @@ const MAX_PROPOSAL = 40;
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 /** Python's `int(x)` for what a model may put into a JSON number field; null where Python would raise. */
-function toInt(v: unknown): number | null {
+export function toInt(v: unknown): number | null {
 	if (typeof v === "boolean") return v ? 1 : 0;
 	if (typeof v === "number") return Number.isFinite(v) ? Math.trunc(v) : null;
 	if (typeof v === "string" && /^\s*[+-]?\d+\s*$/.test(v)) return Number.parseInt(v, 10);

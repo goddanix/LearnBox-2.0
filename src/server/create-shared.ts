@@ -102,6 +102,18 @@ export function requireJob(id: string, deps: CreateDeps): CreateJob {
 /** The whole run must stop: the sign-in is gone, the plan's limit is reached, or the CLI is missing. */
 export class RunBlocked extends Error {}
 
+/** `fn` over the items, at most `limit` at a time (the next item is taken as soon as a worker is free). */
+export async function pool<T>(items: readonly T[], limit: number, fn: (item: T, index: number) => Promise<void>): Promise<void> {
+	let next = 0;
+	const worker = async (): Promise<void> => {
+		while (next < items.length) {
+			const i = next++;
+			await fn(items[i]!, i);
+		}
+	};
+	await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
 export const sleep = (ms: number) => (ms > 0 ? new Promise<void>((resolve) => setTimeout(resolve, ms)) : Promise.resolve());
 
 /** Ask for a JSON object; one repair retry for an unreadable answer, one plain retry for a failed call. */

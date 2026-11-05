@@ -32,6 +32,8 @@ export const PATHS = {
 	studyMedia: path.join(DATA_ROOT, "study", "media"),
 	/** Create jobs (PDF → draft study material): one folder per job (src/store/create.ts). */
 	create: path.join(DATA_ROOT, "create"),
+	/** Obsidian notes per course (themen_notizen.json + the cut-out figures; src/store/notes.ts). */
+	notes: path.join(DATA_ROOT, "notes"),
 	/** Debug artifacts (env-gated): data/debug/provider-events/<chatId>.jsonl
 	 * raw provider stream recordings (src/agent/provider-events.ts). */
 	debug: path.join(DATA_ROOT, "debug"),
@@ -116,6 +118,14 @@ export const GRAPH_FORMAT_FILE = path.join(PATHS.graph, "format.json");
  * from birth, stamped from the strong slot.)
  */
 export const SETTINGS_FILE = path.join(DATA_ROOT, "settings.json");
+
+/**
+ * Where the Obsidian vault is (the learner's choice) and what the last "link the vault" run came to
+ * (src/store/vault-settings.ts). The vault itself is the learner's folder, outside the app's data.
+ * LH_VAULT_DIR names a vault when the learner has chosen none (a test setup, a shell script).
+ */
+export const VAULT_FILE = path.join(DATA_ROOT, "vault.json");
+export const VAULT_DIR_ENV = process.env.LH_VAULT_DIR;
 
 /**
  * User prompt-override files (settings-storage wave, 2026-09-19): the
