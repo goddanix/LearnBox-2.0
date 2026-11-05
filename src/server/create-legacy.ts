@@ -58,7 +58,7 @@ export function legacyMcqTag(jobId: string, questionId: string): string {
 
 const legacyId = (id: string) => `crt_legacy_${id}`;
 
-function resolveDataDir(input: string | undefined): string {
+export function resolveDataDir(input: string | undefined): string {
 	const raw = (input ?? "").trim() || DEFAULT_MEDANKI_DATA;
 	const dir = raw.startsWith("~") ? path.join(os.homedir(), raw.slice(1)) : raw;
 	if (!path.isAbsolute(dir)) throw new CreateInputError("The MedAnki data folder must be an absolute path", 400);

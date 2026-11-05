@@ -20,6 +20,7 @@ export * from "./create-notes.ts";
 export * from "./create-vault.ts";
 export * from "./create-audio.ts";
 export * from "./create-legacy.ts";
+export * from "./create-migrate.ts";
 export * from "./anki-import.ts";
 export * from "./stores.ts";
 export { readRenderSettings, writeRenderSettings } from "../store/render-settings.ts";

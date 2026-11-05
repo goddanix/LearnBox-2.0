@@ -105,6 +105,11 @@ mac:
   extraResources:
     - from: electron/server-title-guard.cjs
       to: server-title-guard.cjs
+    # The text-recognition helper for figure labels (Swift, Apple's Vision),
+    # compiled for the packed architecture by the beforePack hook; the app
+    # finds it at resources/bin/vision-ocr (src/agent/layout/vision.ts).
+    - from: build/bin/${arch}/vision-ocr
+      to: bin/vision-ocr
   icon: build/icon.icon
   # zip rides next to dmg (flipped 2026-10-08): Squirrel.Mac — Electron's
   # macOS auto-updater — installs from ZIP and cannot read DMGs. DMG is
@@ -150,6 +155,7 @@ dmg:
       y: 190
       type: link
       path: /Applications
+beforePack: scripts/build-vision-ocr.cjs
 afterPack: scripts/after-pack.cjs
 win:
   icon: build/icon.ico

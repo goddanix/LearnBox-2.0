@@ -258,9 +258,11 @@ export function CreateView() {
 						</section>
 
 						<LegacyImport
+							courses={courses ?? []}
 							onImported={() => {
 								void loadJobs();
 								void loadLectures();
+								void loadCourses();
 							}}
 						/>
 					</>
