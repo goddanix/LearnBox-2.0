@@ -36,6 +36,8 @@ export const PATHS = {
 	notes: path.join(DATA_ROOT, "notes"),
 	/** The audio summary per course (script, MP3) and the voice (src/store/audio.ts). */
 	audio: path.join(DATA_ROOT, "audio"),
+	/** Phone access: config.json (on/off, port) and devices.json (paired phones, key hashes only; src/store/mobile.ts). */
+	mobile: path.join(DATA_ROOT, "mobile"),
 	/** Debug artifacts (env-gated): data/debug/provider-events/<chatId>.jsonl
 	 * raw provider stream recordings (src/agent/provider-events.ts). */
 	debug: path.join(DATA_ROOT, "debug"),

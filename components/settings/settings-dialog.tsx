@@ -51,6 +51,7 @@ import { Hint } from "@/components/ui/hint";
 import { AppearanceSection, GraphSection } from "./appearance-section.tsx";
 import { KeyboardSection } from "./keyboard-section.tsx";
 import { StudySection } from "./study-section.tsx";
+import { PhoneSection } from "./phone-section.tsx";
 import { ChatGPTUIProvider } from "./chatgpt-connection.tsx";
 import { NativeSubscriptionUIProvider } from "./subscription-connections.tsx";
 
@@ -63,6 +64,7 @@ const SECTIONS = [
 	{ id: "appearance", label: "Appearance" },
 	{ id: "graph", label: "Graph" },
 	{ id: "study", label: "Study" },
+	{ id: "phone", label: "Phone" },
 	{ id: "keyboard", label: "Keyboard", hint: "Stored on this device" },
 	{ id: "general", label: "General" },
 ] as const;
@@ -426,6 +428,11 @@ export function SettingsDialogBody({
 							{active === "study" && (
 								<SettingsSection title="Study" testid="section-study">
 									<StudySection />
+								</SettingsSection>
+							)}
+							{active === "phone" && (
+								<SettingsSection title="Phone" testid="section-phone">
+									<PhoneSection />
 								</SettingsSection>
 							)}
 							{active === "keyboard" && (

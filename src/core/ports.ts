@@ -33,6 +33,7 @@ import type {
 } from "./contracts.ts";
 import type { CardPageResult, DedupeCache } from "./contracts/create-cards.ts";
 import type { LessonPageResult } from "./contracts/create-lesson.ts";
+import type { MobileConfig, MobileDevice } from "./contracts/mobile.ts";
 import type { PageLayout } from "./contracts/page-layout.ts";
 import type { UserSettings } from "./settings.ts";
 
@@ -173,6 +174,18 @@ export interface JobStore {
 	 *  route refuses while jobs are still running, so by the time this
 	 *  fires every record is terminal. */
 	deleteJobsForChat(chatId: string): number;
+}
+
+// ─── MobileStore — phone access (data/mobile) ────────────────────────────────
+
+export interface MobileStore {
+	/** The stored config; missing or malformed → the default (phone access off). */
+	readConfig(): MobileConfig;
+	writeConfig(config: MobileConfig): void;
+	/** Every paired phone, revoked ones included (they stay listed until forgotten). */
+	readDevices(): MobileDevice[];
+	/** Replace the whole list (small; written atomically, readable by the owner only). */
+	writeDevices(devices: readonly MobileDevice[]): void;
 }
 
 // ─── SettingsStore — THE user settings record (settings-storage wave, 2026-09-19) ──
