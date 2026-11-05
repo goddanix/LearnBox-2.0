@@ -41,6 +41,8 @@ export interface ChatRecord {
 	courseId?: string;
 	/** The flashcards the lesson started from (ids; the marker carries their text). */
 	cardIds?: string[];
+	/** The flashcards made from this lesson's statements (Create → lesson cards, Slice 9c): the way back from a card to its lesson. */
+	madeCardIds?: string[];
 	/** The session's plan tree (vision §2) — written by plan tools via saveTree. */
 	tree?: PlanTree;
 	/** Append-only usage log (observability, 2026-09): one entry per model
@@ -272,6 +274,7 @@ export interface ChatSummary {
 	/** The study course the lesson belongs to, and the cards it started from (record fields, see ChatRecord). */
 	courseId?: string;
 	cardIds?: string[];
+	madeCardIds?: string[];
 	messageCount: number;
 	/** The session's current phase, derived from the stored plan tree. */
 	phase: Phase3;

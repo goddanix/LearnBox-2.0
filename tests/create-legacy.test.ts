@@ -195,6 +195,7 @@ describe("the import", () => {
 
 		// the second job: a source PDF, its text for "more questions", a failed page, a deleted draft
 		const b = deps.create.get(`crt_legacy_${JOB_B}`)!;
+		assert.ok(b.kind === "mcq");
 		assert.equal(sources.get(b.sourceLectureId!)?.source.fileName, "Lecture slides.pdf");
 		assert.equal(fs.readFileSync(path.join(deps.create.workDir(b.id), "lecture.txt"), "utf-8"), "LECTURE FACTS");
 		assert.equal(b.pages["2"]?.status, "error");

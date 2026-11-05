@@ -437,7 +437,7 @@ describe("saving into the vault", () => {
 	it("refuses when a PDF the notes link to is gone, rather than writing dead links", async () => {
 		const s = await written();
 		s.create.update(s.create.list()[0]!.id, (j) => {
-			j.lectureId = "gone";
+			if (j.kind !== "lesson") j.lectureId = "gone";
 		});
 		assert.throws(() => saveToVault("cardio", s.deps), (e) => e instanceof CreateInputError && e.status === 409 && /no longer in the library/.test(e.message));
 	});

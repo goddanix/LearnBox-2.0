@@ -49,6 +49,7 @@ import {
 	validateMcqQuestion,
 } from "../core/create.ts";
 import { startCardsJob, withCardSeams } from "./create-cards.ts";
+import { startLessonJob } from "./create-lesson.ts";
 import { type AdoptResult, type CreateDeps, RunBlocked, askJson, defaultCreateDeps, errorText, pad, requireJob, reconciled, running, summarize } from "./create-shared.ts";
 
 export { type AdoptResult, type CreateDeps, defaultCreateDeps } from "./create-shared.ts";
@@ -304,15 +305,17 @@ export interface StartCreateOptions {
 /**
  * Start (or resume) a job's run and return at once. `settled` resolves when the
  * run has ended (a test seam; the route ignores it). A run already in flight
- * is left alone (`started: false`). A cards job is run by create-cards.ts
- * (`more` does not apply there: a page that is run again is named in `pages`).
+ * is left alone (`started: false`). A cards job is run by create-cards.ts, a lesson job by
+ * create-lesson.ts (`more` does not apply there: a page that is run again is named in `pages`).
  */
 export function startCreateJob(
 	id: string,
 	opts: StartCreateOptions = {},
 	deps: CreateDeps = defaultCreateDeps(),
 ): { started: boolean; settled: Promise<void> } {
-	if (requireJob(id, deps).kind === "cards") return startCardsJob(id, { pages: opts.pages }, withCardSeams(deps));
+	const kind = requireJob(id, deps).kind;
+	if (kind === "cards") return startCardsJob(id, { pages: opts.pages }, withCardSeams(deps));
+	if (kind === "lesson") return startLessonJob(id, { pages: opts.pages }, deps);
 	const job = requireMcq(id, deps);
 	if (running.has(id)) return { started: false, settled: Promise.resolve() };
 

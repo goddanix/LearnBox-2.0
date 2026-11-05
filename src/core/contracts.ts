@@ -20,6 +20,7 @@ export * from "./contracts/study.ts";
 export * from "./contracts/study-link.ts";
 export * from "./contracts/create.ts";
 export * from "./contracts/create-cards.ts";
+export * from "./contracts/create-lesson.ts";
 export * from "./contracts/create-notes.ts";
 export * from "./contracts/create-audio.ts";
 export * from "./contracts/create-migrate.ts";

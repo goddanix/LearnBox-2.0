@@ -16,6 +16,7 @@ export * from "./study-link.ts";
 export * from "./create.ts";
 export * from "./create-cards.ts";
 export * from "./create-cards-edit.ts";
+export * from "./create-lesson.ts";
 export * from "./create-courses.ts";
 export * from "./create-notes.ts";
 export * from "./create-vault.ts";

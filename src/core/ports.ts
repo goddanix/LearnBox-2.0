@@ -32,6 +32,7 @@ import type {
 	NotesSource,
 } from "./contracts.ts";
 import type { CardPageResult, DedupeCache } from "./contracts/create-cards.ts";
+import type { LessonPageResult } from "./contracts/create-lesson.ts";
 import type { PageLayout } from "./contracts/page-layout.ts";
 import type { UserSettings } from "./settings.ts";
 
@@ -69,6 +70,9 @@ export interface ChatStore {
 	/** Set (or clear, with null) the study course a session belongs to. Like a
 	 *  rename it is NOT conversation activity: updatedAt stays put. */
 	setChatCourse(id: string, courseId: string | null): ChatRecord;
+	/** Remember flashcards made from this lesson (ids added to `madeCardIds`, once each; Slice 9c).
+	 *  Like a rename it is not conversation activity: updatedAt stays put. Null for an unknown id. */
+	linkCards(id: string, cardIds: readonly string[]): ChatRecord | null;
 	/** Delete the session record entirely (session-deletion wave 6, owner
 	 *  2026-09-22). False when the id is unknown. The graph-ledger purge and
 	 *  job cleanup are the caller's choreography (core/graph-deletion.ts +
@@ -287,6 +291,9 @@ export interface CreateStore {
 	/** Cards jobs: one page's card drafts, and replacing them. */
 	readCardPage(id: string, page: number): CardPageResult | null;
 	writeCardPage(id: string, result: CardPageResult): void;
+	/** Lesson jobs: one statement's card drafts, and replacing them. */
+	readLessonPage(id: string, page: number): LessonPageResult | null;
+	writeLessonPage(id: string, result: LessonPageResult): void;
 	/** Cards jobs: the page layout the cards were made from (lines, figures, legends), cached so a rerun and the focus screen need no second reading. */
 	readLayout(id: string, page: number): PageLayout | null;
 	writeLayout(id: string, page: number, layout: PageLayout): void;

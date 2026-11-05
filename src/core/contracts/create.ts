@@ -13,11 +13,12 @@
  */
 
 import type { CardSettings, GlossaryTerm } from "./create-cards.ts";
+import type { LessonJob } from "./create-lesson.ts";
 
 /** Schema stamp on every job record (a newer stamp is refused on read). */
 export const CREATE_SCHEMA = 1;
 
-export type CreateJobKind = "mcq" | "cards";
+export type CreateJobKind = "mcq" | "cards" | "lesson";
 
 export type CreateJobState = "queued" | "running" | "done" | "stopped" | "interrupted";
 
@@ -64,17 +65,12 @@ export const DEFAULT_MCQ_SETTINGS: McqSettings = {
 	concurrency: 2,
 };
 
-interface CreateJobBase {
+export interface CreateJobBase {
 	v: typeof CREATE_SCHEMA;
 	id: string;
-	/** Display name, derived from the lecture until renamed. */
+	/** Display name, derived from the lecture (or the lesson) until renamed. */
 	name: string;
-	/** The library PDF the material is made from (data/library). */
-	lectureId: string;
-	/** An optional second library PDF — the factual source (e.g. the lecture
-	 *  slides) when the main PDF is a question sheet; its text rides in every page prompt. */
-	sourceLectureId?: string;
-	/** Pages of the PDF at creation (the range is clamped to it). */
+	/** Pages of the PDF at creation (the range is clamped to it); for a lesson job, its statements. */
 	nPages: number;
 	state: CreateJobState;
 	/** The Claude CLI needs a sign-in (or the plan's limit is hit): the run stopped on its own. */
@@ -86,12 +82,21 @@ interface CreateJobBase {
 	pages: Record<string, CreatePage>;
 }
 
-export interface McqJob extends CreateJobBase {
+/** A job made from a library PDF. */
+interface PdfJobBase extends CreateJobBase {
+	/** The library PDF the material is made from (data/library). */
+	lectureId: string;
+	/** An optional second library PDF — the factual source (e.g. the lecture
+	 *  slides) when the main PDF is a question sheet; its text rides in every page prompt. */
+	sourceLectureId?: string;
+}
+
+export interface McqJob extends PdfJobBase {
 	kind: "mcq";
 	settings: McqSettings;
 }
 
-export interface CardsJob extends CreateJobBase {
+export interface CardsJob extends PdfJobBase {
 	kind: "cards";
 	settings: CardSettings;
 	/** The subject (study course) the PDF belongs to: its topics were the focus when the job was made, and its drafts are adopted there. */
@@ -106,7 +111,7 @@ export interface CardsJob extends CreateJobBase {
 	headings?: Record<string, string>;
 }
 
-export type CreateJob = McqJob | CardsJob;
+export type CreateJob = McqJob | CardsJob | LessonJob;
 
 export const MCQ_LETTERS = ["A", "B", "C", "D"] as const;
 export type McqLetter = (typeof MCQ_LETTERS)[number];
@@ -144,15 +149,18 @@ export interface CreateJobSummary {
 	id: string;
 	kind: CreateJobKind;
 	name: string;
-	lectureId: string;
+	/** The library PDF (absent for a lesson job). */
+	lectureId?: string;
 	state: CreateJobState;
 	running: boolean;
 	blocked?: string;
 	fatal?: string;
 	createdAt: string;
 	nPages: number;
-	/** Cards jobs: the subject the PDF belongs to. */
+	/** Cards and lesson jobs: the subject the PDF belongs to / the cards are for. */
 	courseId?: string;
+	/** Lesson jobs: the lesson the statements are from. */
+	chatId?: string;
 	/** Pages in the job's range. */
 	total: number;
 	counts: Record<CreatePageStatus, number>;

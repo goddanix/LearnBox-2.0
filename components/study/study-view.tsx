@@ -69,10 +69,10 @@ export function StudyView({ initialCourseId, initialCardId }: { initialCourseId?
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		}
-		// The lessons tied to a course or to cards (Slice 9): a missing list only hides them.
+		// The lessons tied to a course, to cards they started from or to cards made from them (Slice 9): a missing list only hides them.
 		try {
 			const out = await api<{ chats?: ChatListItem[] }>("/api/chats");
-			setLessons((out.chats ?? []).filter((c) => (c.kind ?? "teach") === "teach" && (c.courseId || (c.cardIds?.length ?? 0) > 0)));
+			setLessons((out.chats ?? []).filter((c) => (c.kind ?? "teach") === "teach" && (c.courseId || (c.cardIds?.length ?? 0) > 0 || (c.madeCardIds?.length ?? 0) > 0)));
 		} catch {
 			setLessons([]);
 		}
@@ -406,7 +406,7 @@ function Session({
 	);
 
 	const card = state?.card ?? null;
-	const cardLessons = useMemo(() => (card ? lessons.filter((l) => l.cardIds?.includes(card.id)) : []), [card, lessons]);
+	const cardLessons = useMemo(() => (card ? lessons.filter((l) => l.cardIds?.includes(card.id) || l.madeCardIds?.includes(card.id)) : []), [card, lessons]);
 	/** A lesson on this card (Slice 9): the draft opens with the course, this card and a suggested first message. */
 	const learn = useCallback(() => {
 		if (!card) return;

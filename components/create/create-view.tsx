@@ -7,22 +7,27 @@ import { CourseDetail } from "@/components/create/course-detail";
 import { CoursesPanel } from "@/components/create/courses-panel";
 import { JobDetail } from "@/components/create/job-detail";
 import { LegacyImport } from "@/components/create/legacy-import";
+import { LessonJobDetail } from "@/components/create/lesson-job-detail";
 import { NewCardsForm } from "@/components/create/new-cards-form";
+import { NewLessonForm } from "@/components/create/new-lesson-form";
 import { NewJobForm } from "@/components/create/new-job-form";
 import { SidebarToggle } from "@/components/sidebar";
 import { studyApi as api } from "@/components/study/api";
 import { Button } from "@/components/ui/button";
-import type { CreateCourse, CreateJobSummary, LectureSource } from "@/src/core";
+import type { CreateCourse, CreateJobSummary, LectureSource, LessonSource } from "@/src/core";
 
 /**
  * The Create area: the PDF library (the same one the lecture picker uses), the
  * jobs that turn a PDF into draft flashcards or multiple-choice questions, and
  * one job's drafts to adopt into a course. The server holds the runs; this page only polls their progress.
+ * Flashcards from a lesson's statements start here too: `lesson` (a lesson's id) or `nodes` (graph nodes picked on
+ * the home page) open the form for them above the library (Slice 9c).
  */
 
 const KIND_LABEL: Record<CreateJobSummary["kind"], string> = {
 	mcq: "Multiple-choice test",
 	cards: "Flashcards",
+	lesson: "Lesson cards",
 };
 
 const STATE_LABEL: Record<CreateJobSummary["state"], string> = {
@@ -55,7 +60,7 @@ function ViewSwitch({ view, onView }: { view: "pdfs" | "courses"; onView: (view:
 	);
 }
 
-export function CreateView() {
+export function CreateView({ lesson, nodes }: { lesson?: string; nodes?: string[] } = {}) {
 	const [lectures, setLectures] = useState<LectureSource[] | null>(null);
 	const [jobs, setJobs] = useState<CreateJobSummary[] | null>(null);
 	const [courses, setCourses] = useState<CreateCourse[] | null>(null);
@@ -65,6 +70,8 @@ export function CreateView() {
 	const [newFor, setNewFor] = useState<{ lecture: LectureSource; kind: CreateJobSummary["kind"] } | null>(null);
 	const [uploading, setUploading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// The statements a lesson-cards form was asked for (null: none asked, or already made into a job).
+	const [lessonFor, setLessonFor] = useState<{ source: LessonSource; nodeIds?: string[] } | null>(null);
 	const fileInput = useRef<HTMLInputElement>(null);
 
 	const loadJobs = useCallback(async () => {
@@ -96,6 +103,28 @@ export function CreateView() {
 		void loadCourses();
 	}, [loadJobs, loadLectures, loadCourses]);
 
+	const nodeKey = (nodes ?? []).join(",");
+	useEffect(() => {
+		if (!lesson && !nodeKey) return;
+		let live = true;
+		api<LessonSource>(lesson ? `/api/create/lesson-source?chat=${encodeURIComponent(lesson)}` : `/api/create/lesson-source?nodes=${encodeURIComponent(nodeKey)}`)
+			.then((source) => live && setLessonFor({ source, ...(lesson ? {} : { nodeIds: nodeKey.split(",") }) }))
+			.catch((e) => live && setError(e instanceof Error ? e.message : String(e)));
+		return () => {
+			live = false;
+		};
+	}, [lesson, nodeKey]);
+
+	/** The form is done with: the address goes back to plain /create so a reload does not open it again. */
+	function closeLessonForm() {
+		setLessonFor(null);
+		try {
+			window.history.replaceState(null, "", "/create");
+		} catch {
+			/* the address is a convenience only */
+		}
+	}
+
 	const anyRunning = jobs?.some((j) => j.running) ?? false;
 	useEffect(() => {
 		if (!anyRunning) return;
@@ -120,7 +149,7 @@ export function CreateView() {
 		}
 	}
 
-	const Detail = openJob?.kind === "cards" ? CardsJobDetail : JobDetail;
+	const Detail = openJob?.kind === "cards" ? CardsJobDetail : openJob?.kind === "lesson" ? LessonJobDetail : JobDetail;
 
 	return (
 		<div className="flex h-dvh flex-col" data-testid="create-view">
@@ -174,6 +203,19 @@ export function CreateView() {
 				) : (
 					<>
 						<ViewSwitch view={view} onView={setView} />
+						{lessonFor && (
+							<NewLessonForm
+								source={lessonFor.source}
+								nodeIds={lessonFor.nodeIds}
+								courses={courses ?? []}
+								onCancel={closeLessonForm}
+								onCreated={(job) => {
+									closeLessonForm();
+									setOpenJob({ id: job.id, kind: job.kind });
+									void loadJobs();
+								}}
+							/>
+						)}
 						{newFor && lectures && (
 							(() => {
 								const created = (job: CreateJobSummary) => {
@@ -249,7 +291,7 @@ export function CreateView() {
 										<span className="block h-full bg-sky-400 transition-all" style={{ width: `${j.total === 0 ? 0 : (100 * j.counts.done) / j.total}%` }} />
 									</span>
 									<span className="text-xs text-muted-foreground">
-										{j.counts.done} of {j.total} pages · {j.drafts} drafts · {j.adopted} in your cards
+										{j.counts.done} of {j.total} {j.kind === "lesson" ? "statements" : "pages"} · {j.drafts} drafts · {j.adopted} in your cards
 										{j.counts.error > 0 && <span className="text-red-400"> · {j.counts.error} failed</span>}
 										{j.blocked && <span className="text-red-400"> · needs your attention</span>}
 									</span>

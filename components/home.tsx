@@ -224,6 +224,7 @@ export function Home({
 								count={practiceProps.length}
 								onOpen={() => setChainSelectOpen(true)}
 								onClear={() => setPracticeProps([])}
+								cardsHref={`/create?nodes=${practiceProps.map((p) => encodeURIComponent(p.id)).join(",")}`}
 							/>
 						)}
 						setup={zeroKeys ? (

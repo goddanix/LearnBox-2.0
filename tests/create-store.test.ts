@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { after, beforeEach, describe, it } from "node:test";
-import { CREATE_SCHEMA, DEFAULT_MCQ_SETTINGS, type CreateJob, type McqPageResult } from "../src/core/contracts.ts";
+import { CREATE_SCHEMA, DEFAULT_LESSON_SETTINGS, DEFAULT_MCQ_SETTINGS, type CreateJob, type LessonPageResult, type McqPageResult } from "../src/core/contracts.ts";
 import type { CreateStore } from "../src/core/ports.ts";
 import { createCreateStore } from "../src/store/create.ts";
 
@@ -124,5 +124,46 @@ describe("create store", () => {
 		assert.equal(store.remove("crt_a"), true);
 		assert.equal(fs.existsSync(path.join(dir, "crt_a")), false);
 		assert.equal(store.remove("crt_a"), false);
+	});
+});
+
+describe("create store: lesson jobs", () => {
+	const lessonJob = (id: string): CreateJob => ({
+		v: CREATE_SCHEMA,
+		id,
+		kind: "lesson",
+		name: "Wrist nerves",
+		nPages: 1,
+		settings: DEFAULT_LESSON_SETTINGS,
+		courseId: "anat",
+		chatId: "c1",
+		statements: [{ nodeId: "n_median", name: "Median nerve", statement: "The median nerve passes through the carpal tunnel." }],
+		state: "queued",
+		createdAt: "2026-11-05T08:00:00.000Z",
+		pages: { "1": { status: "pending", count: 0, adopted: 0 } },
+	});
+	const result: LessonPageResult = {
+		page: 1,
+		nodeId: "n_median",
+		cards: [{ id: "p001-c01", page: 1, type: "basic", front: "Q?", back: "A.", extra: "", deleted: false, include: true }],
+		note: "",
+	};
+
+	it("keeps a lesson job and its statements' drafts, and reads them back", () => {
+		store.createJob(lessonJob("crt_l"));
+		assert.equal(store.get("crt_l")!.kind, "lesson");
+		assert.equal(store.readLessonPage("crt_l", 1), null);
+		store.writeLessonPage("crt_l", result);
+		assert.deepEqual(store.readLessonPage("crt_l", 1), result);
+		assert.equal(store.readLessonPage("crt_l", 2), null);
+	});
+
+	it("does not take a torn file, or a page of another kind, for a lesson page", () => {
+		store.createJob(lessonJob("crt_l"));
+		store.writePage("crt_l", page(1)); // an MC page has questions, not cards
+		assert.equal(store.readLessonPage("crt_l", 1), null);
+		store.writeLessonPage("crt_l", result);
+		fs.writeFileSync(path.join(dir, "crt_l", "results", "p001.json"), "{ torn");
+		assert.equal(store.readLessonPage("crt_l", 1), null);
 	});
 });

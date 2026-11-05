@@ -198,6 +198,9 @@ describe("from a card to a lesson", () => {
 			lesson("c2", "Unrelated lesson", { courseId: "anat", cardIds: ["ulnar"] }),
 			lesson("c3", "Moved out of the course", { cardIds: ["queued"] }),
 			lesson("c4", "A practice drill", { kind: "practice", courseId: "anat", cardIds: ["queued"] }),
+			// a lesson the card was MADE from (Create → cards from a lesson), tied to no course
+			lesson("c5", "Made this card", { madeCardIds: ["queued", "other"] }),
+			lesson("c6", "Made other cards", { madeCardIds: ["other"] }),
 		],
 	});
 	const start = async () => {
@@ -226,13 +229,14 @@ describe("from a card to a lesson", () => {
 		assert.deepEqual(pushed, ["/chat/new?course=anat&cards=queued"]);
 	});
 
-	it("lists the lessons that started from this card, once the answer is up, practice drills left out", async () => {
+	it("lists the lessons that started from this card or made it, once the answer is up, practice drills left out", async () => {
 		await start();
 		assert.equal($("study-card-lessons"), null, "front side stays clean");
 		await click("study-reveal");
 		assert.deepEqual($$("study-card-lesson").map((a) => [a.textContent, a.getAttribute("href")]), [
 			["Radial nerve lesson", "/chat/c1"],
 			["Moved out of the course", "/chat/c3"],
+			["Made this card", "/chat/c5"],
 		]);
 	});
 });

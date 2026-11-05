@@ -198,6 +198,19 @@ function setChatCourse(id: string, courseId: string | null): ChatRecord {
 	return record;
 }
 
+/** Remember flashcards made from a lesson (Slice 9c): the ids join `madeCardIds`, once each. Not
+ *  conversation activity (updatedAt stays put); chats-changed announces the list shape. */
+function linkCards(id: string, cardIds: readonly string[]): ChatRecord | null {
+	const record = getChat(id);
+	if (!record) return null;
+	const merged = [...new Set([...(record.madeCardIds ?? []), ...cardIds])];
+	if (merged.length === (record.madeCardIds ?? []).length) return record;
+	record.madeCardIds = merged;
+	writeChat(record);
+	emit("chats-changed", {});
+	return record;
+}
+
 /** Delete the session record file entirely (session-deletion wave 6,
  *  owner 2026-09-22). False when the id is unknown — the route turns that
  *  into a 404. The record's graph traces and jobs are the route's
@@ -231,6 +244,7 @@ export const chatStore: ChatStore = {
 	saveSettings,
 	renameChat,
 	setChatCourse,
+	linkCards,
 	deleteChat,
 	appendTurnUsage,
 	appendExtractionUsage,

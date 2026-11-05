@@ -57,6 +57,7 @@ import { ThinkingCard, type PracticeThinkingData } from "@/components/practice-c
 import { GraphContextCard, type GraphContextData } from "@/components/graph-context-card";
 import { StudyContextCard } from "@/components/study-context-card";
 import { SessionCourseChip } from "@/components/session-course-chip";
+import { LessonCardsButton } from "@/components/lesson-cards-button";
 import { TopBar } from "@/components/top-bar";
 import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, QuestionFormDraft, StudyContextData, TurnUsage, SessionPricing } from "@/src/core";
 import type { LhViewMessage } from "@/src/core";
@@ -1279,6 +1280,8 @@ export function Chat({
 					{/* The study course of a lesson (Learnbox 2.0, Slice 9): teaching
 					    sessions only — practice works from the graph. */}
 					{kind !== "practice" && <SessionCourseChip chatId={chatId} courseId={courseId} />}
+					{/* Flashcards from what the lesson established (Slice 9c). */}
+					{kind !== "practice" && <LessonCardsButton chatId={chatId} refreshKey={messages.length} />}
 					{/* The plan chip (owner, plan-placement round): session-level
 					    structure beside the phase chip — access to the full-DAG popup
 					    at every width; the marginalia is the wide-screen glance view. */}

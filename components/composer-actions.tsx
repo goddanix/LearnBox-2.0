@@ -1,7 +1,8 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { DumbbellIcon } from "lucide-react";
+import Link from "next/link";
+import { DumbbellIcon, LayersIcon } from "lucide-react";
 
 /** Home and the draft share one wrapping action row. Picker controls lead
  * (node picks, then the course); setup is centered only when it is the sole
@@ -22,10 +23,12 @@ export function ComposerActions({ picker, course, setup }: { picker?: ReactNode;
 
 /** Count and Clear stay together if the setup action wraps onto another line.
  * These are node counts, even when a whole chain supplied the selection. */
-export function NodePickerControl({ count, onOpen, onClear }: {
+export function NodePickerControl({ count, onOpen, onClear, cardsHref }: {
 	count: number;
 	onOpen?: () => void;
 	onClear?: () => void;
+	/** Where "Make cards" leads (Create's form for flashcards from the picked statements); absent = no such button. */
+	cardsHref?: string;
 }) {
 	return (
 		<div className="flex items-center gap-1.5">
@@ -52,6 +55,17 @@ export function NodePickerControl({ count, onOpen, onClear }: {
 				>
 					Clear
 				</button>
+			)}
+			{count > 0 && cardsHref && (
+				<Link
+					href={cardsHref}
+					data-testid="practice-props-cards"
+					title="Make flashcards from the picked statements"
+					className="flex cursor-pointer items-center gap-1.5 rounded-full px-2 py-1 font-ui text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+				>
+					<LayersIcon aria-hidden="true" className="size-3.5" />
+					Make cards
+				</Link>
 			)}
 		</div>
 	);

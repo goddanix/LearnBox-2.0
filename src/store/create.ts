@@ -2,7 +2,7 @@
  * CreateStore — the fs adapter for Create jobs: one folder per job in
  * data/create/<id>/ holding
  *   job.json          the CreateJob record (progress book)
- *   results/p003.json one page's drafts (McqPageResult, or CardPageResult for cards jobs)
+ *   results/p003.json one page's drafts (McqPageResult, CardPageResult for cards jobs, LessonPageResult for lesson jobs)
  *   layouts/p003.json cards jobs: the page layout the cards were made from
  *   media/            cards jobs: the rendered card pictures
  *   dedupe.json       cards jobs: the progress of Claude's content check of duplicates
@@ -19,6 +19,7 @@ import * as path from "node:path";
 import { PATHS } from "../../config.ts";
 import { CREATE_SCHEMA, type CreateJob, type McqPageResult } from "../core/contracts/create.ts";
 import type { CardPageResult, DedupeCache } from "../core/contracts/create-cards.ts";
+import type { LessonPageResult } from "../core/contracts/create-lesson.ts";
 import type { PageLayout } from "../core/contracts/page-layout.ts";
 import type { CreateStore } from "../core/ports.ts";
 
@@ -110,6 +111,14 @@ export function createCreateStore(root: string): CreateStore {
 			return record as unknown as CardPageResult;
 		},
 		writeCardPage(id, result) {
+			writeJson(resultFile(id, result.page), result);
+		},
+		readLessonPage(id, page) {
+			const record = readJson(resultFile(id, page));
+			if (!isRecord(record) || record.page !== page || !Array.isArray(record.cards) || typeof record.nodeId !== "string") return null;
+			return record as unknown as LessonPageResult;
+		},
+		writeLessonPage(id, result) {
 			writeJson(resultFile(id, result.page), result);
 		},
 		readLayout(id, page) {
