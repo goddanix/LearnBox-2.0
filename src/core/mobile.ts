@@ -13,6 +13,7 @@ import {
 	PAIRING_CODE_LENGTH,
 } from "./contracts/mobile.ts";
 import type { MobileConfig, MobileDevice, MobileDeviceSummary, TailscaleState } from "./contracts/mobile.ts";
+import { PHONE_LESSON_ID } from "./phone-lessons.ts";
 
 export const DEFAULT_MOBILE_CONFIG: MobileConfig = { v: MOBILE_SCHEMA, enabled: false, port: MOBILE_DEFAULT_PORT };
 
@@ -120,14 +121,21 @@ export type MobileRouteClass = "public" | "device" | "deny";
 /**
  * Every phone-visible route, listed. Anything not here is `deny`, so a new Learnbox route is closed to the phone until
  * someone opens it on purpose. The phone studies from its own copy (10c), so it needs no study routes: it takes the
- * deck and its media, and sends its answers back (10d). Slices add their routes here (10e card actions, 10f lessons).
+ * deck and its media, and sends its answers and card changes back (10d, 10e). Lessons (10f) are the one thing that
+ * runs on the Mac: they get their own routes, which reach study lessons only (server/phone-lessons.ts).
  */
 const DEVICE_ROUTES: readonly { method: string; path: string }[] = [
 	{ method: "GET", path: "/api/phone/deck" },
 	{ method: "POST", path: "/api/phone/sync" },
+	{ method: "POST", path: "/api/phone/lesson" },
+	{ method: "GET", path: "/api/phone/lessons" },
 ];
 /** One media file by name: `/api/phone/media/<name>`, exactly one non-empty segment after the prefix. */
 const MEDIA_PREFIX = ["api", "phone", "media"];
+/** One lesson: `/api/phone/lesson/<id>` (read it) and `/api/phone/lesson/<id>/<what>` for the turn's wire. */
+const LESSON_PREFIX = ["api", "phone", "lesson"];
+const LESSON_READS: ReadonlySet<string> = new Set(["stream", "turn"]);
+const LESSON_WRITES: ReadonlySet<string> = new Set(["send", "steer", "dismiss"]);
 
 /**
  * Classify one request target. `target` is the path as it came over the wire (no query string). Anything that could
@@ -148,5 +156,14 @@ export function mobileRoute(method: string, target: string): MobileRouteClass {
 	if (read && first === "fonts" && segments.length === 2 && segments[1] !== "") return "public";
 	const path = target.length > 1 && target.endsWith("/") ? target.slice(0, -1) : target;
 	if (method === "GET" && segments.length === 4 && MEDIA_PREFIX.every((p, i) => segments[i] === p) && segments[3] !== "") return "device";
+	// a trailing slash names the same address (the table below reads the shorter ones the same way)
+	const lesson = segments.at(-1) === "" ? segments.slice(0, -1) : segments;
+	if (lesson.length >= 4 && LESSON_PREFIX.every((p, i) => lesson[i] === p)) {
+		if (!PHONE_LESSON_ID.test(lesson[3]!)) return "deny";
+		if (lesson.length === 4) return method === "GET" ? "device" : "deny";
+		const what = lesson[4]!;
+		if (lesson.length === 5 && ((method === "GET" && LESSON_READS.has(what)) || (method === "POST" && LESSON_WRITES.has(what)))) return "device";
+		return "deny";
+	}
 	return DEVICE_ROUTES.some((r) => r.method === method && r.path === path) ? "device" : "deny";
 }

@@ -141,6 +141,8 @@ function fakeApi(courses: StudyCourseSummary[], script: (StudyNextResult | Error
 			bodies.push(input);
 			return take();
 		},
+		weakSpots: async () => [],
+		linkCards: async () => [],
 		cardAction: async (input) => {
 			calls.push(`card ${input.action}`);
 			bodies.push(input);

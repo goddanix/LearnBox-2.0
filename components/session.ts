@@ -26,14 +26,16 @@ export interface UseChatSessionOptions {
 	initialError?: string;
 	/** Reattach on mount: a turn is running server-side with no live view. */
 	initiallyInFlight?: boolean;
+	/** Where the wire goes (the phone's lesson page routes it through the gateway); defaults to the global fetch. */
+	fetch?: typeof globalThis.fetch;
 }
 
-export function useChatSession({ chatId, initialMessages, initialError, initiallyInFlight }: UseChatSessionOptions) {
+export function useChatSession({ chatId, initialMessages, initialError, initiallyInFlight, fetch }: UseChatSessionOptions) {
 	// The model is per-mount (chatId-keyed component); onChange forces the
 	// re-render. The ref pattern keeps it stable across renders.
 	const modelRef = useRef<SessionModel | null>(null);
 	if (modelRef.current === null) {
-		modelRef.current = new SessionModel({ chatId, initialMessages, initialError });
+		modelRef.current = new SessionModel({ chatId, initialMessages, initialError, fetch });
 	}
 	const model = modelRef.current;
 	// The render VERSION — bumped by every model change, so the state memo

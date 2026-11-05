@@ -107,6 +107,31 @@ describe("what the gateway lets through", () => {
 			assert.equal(mobileRoute(m, p), "device", `${m} ${p}`);
 		}
 	});
+	it("opens a lesson's own addresses, for the chat id alone", () => {
+		const id = "chat_mhx4k2_1a2b3c4d";
+		for (const [m, p] of [
+			["POST", "/api/phone/lesson"], ["POST", "/api/phone/lesson/"], ["GET", "/api/phone/lessons"],
+			["GET", `/api/phone/lesson/${id}`], ["GET", `/api/phone/lesson/${id}/`], ["GET", `/api/phone/lesson/${id}/stream`], ["GET", `/api/phone/lesson/${id}/stream/`], ["GET", `/api/phone/lesson/${id}/turn`],
+			["POST", `/api/phone/lesson/${id}/send`], ["POST", `/api/phone/lesson/${id}/steer`], ["POST", `/api/phone/lesson/${id}/dismiss`],
+		] as const) {
+			assert.equal(mobileRoute(m, p), "device", `${m} ${p}`);
+		}
+	});
+	it("keeps the rest of the chat surface closed to the phone", () => {
+		const id = "chat_mhx4k2_1a2b3c4d";
+		for (const [m, p] of [
+			["POST", `/api/phone/lesson/${id}`], ["PUT", `/api/phone/lesson/${id}`], ["DELETE", `/api/phone/lesson/${id}`],
+			["POST", `/api/phone/lesson/${id}/stream`], ["GET", `/api/phone/lesson/${id}/send`], ["GET", `/api/phone/lesson/${id}/steer`], ["GET", `/api/phone/lesson/${id}/dismiss`],
+			["GET", `/api/phone/lesson/${id}/settings`], ["POST", `/api/phone/lesson/${id}/markdown`], ["DELETE", `/api/phone/lesson/${id}/stream`],
+			["GET", `/api/phone/lesson/${id}/stream/x`], ["GET", `/api/phone/lesson/${id}/stream/x/`],
+			["GET", "/api/phone/lesson"], ["PUT", "/api/phone/lesson"], ["POST", "/api/phone/lessons"], ["GET", "/api/phone/lessons/x"],
+			["GET", "/api/phone/lesson/%2e%2e"], ["GET", "/api/phone/lesson/a%2fb/stream"], ["GET", "/api/phone/lesson/a.b"], ["GET", "/api/phone/lesson/a b"], ["GET", `/api/phone/lesson/${"x".repeat(81)}`],
+			["GET", "/api/phone/lesson//stream"], ["GET", "/api/phone/lesson/../stream"],
+			["POST", "/api/chat"], ["GET", `/api/chats/${id}`], ["GET", `/api/chats/${id}/stream`], ["POST", `/api/chats/${id}/steer`], ["POST", "/api/chats"], ["GET", "/api/jobs"], ["POST", "/api/activity/abort"],
+		] as const) {
+			assert.equal(mobileRoute(m, p), "deny", `${m} ${p}`);
+		}
+	});
 	it("closes everything else — settings, keys, billing, imports, chats, creation, the root", () => {
 		for (const [m, p] of [
 			["GET", "/"], ["GET", "/study"], ["GET", "/settings"], ["GET", "/chat/new"], ["GET", "/create"],

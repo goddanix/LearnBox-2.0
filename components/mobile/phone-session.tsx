@@ -1,11 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowLeftIcon, CalendarClockIcon, EllipsisIcon, GraduationCapIcon, PauseIcon, PencilIcon, Undo2Icon } from "lucide-react";
+import { ArrowLeftIcon, BookOpenIcon, CalendarClockIcon, EllipsisIcon, GraduationCapIcon, PauseIcon, PencilIcon, Undo2Icon } from "lucide-react";
 import { CardFrame } from "@/components/study/card-frame";
 import { describeUnsent } from "@/src/core";
 import type { StudyCourseSummary, StudyGrade } from "@/src/core";
 import { PhoneCardEditor } from "./phone-card-editor";
+import { NEEDS_MAC } from "./phone-course-extras";
 import { PhoneCounts } from "./phone-courses";
 import type { PhoneStudyApi } from "./study-api";
 import { useStudySession } from "./use-study-session";
@@ -30,6 +31,8 @@ export function PhoneSession({
 	unsentOps,
 	onBackup,
 	notice,
+	online = true,
+	onLearn,
 }: {
 	api: PhoneStudyApi;
 	course: StudyCourseSummary;
@@ -42,6 +45,10 @@ export function PhoneSession({
 	/** Hand them to the share sheet. */
 	onBackup?: () => void;
 	notice?: string | null;
+	/** The browser has a connection: a lesson runs on the Mac, so "Learn about this card" needs it. */
+	online?: boolean;
+	/** Start a lesson on the Mac about this card. */
+	onLearn?: (cardId: string) => void;
 }) {
 	const s = useStudySession(api, course.id, onError);
 	const { state, card } = s;
@@ -165,6 +172,29 @@ export function PhoneSession({
 						<PauseIcon className="size-5" />
 						Pause card
 					</button>
+					{onLearn && (
+						<>
+							<button
+								type="button"
+								role="menuitem"
+								disabled={!online}
+								onClick={() => {
+									setMenu(false);
+									onLearn(card.id);
+								}}
+								className="col-span-3 flex h-12 items-center justify-center gap-2 rounded-xl border bg-card text-sm active:bg-accent disabled:opacity-50"
+								data-testid="phone-menu-learn"
+							>
+								<BookOpenIcon className="size-5" />
+								Learn about this card
+							</button>
+							{!online && (
+								<p className="col-span-3 text-center text-xs text-muted-foreground" data-testid="phone-menu-learn-hint">
+									{NEEDS_MAC}
+								</p>
+							)}
+						</>
+					)}
 				</div>
 			)}
 

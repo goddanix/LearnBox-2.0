@@ -2,34 +2,55 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { StudyCourseSummary } from "@/src/core";
+import type { PhoneLesson, StudyCourseSummary, StudyLinkCard } from "@/src/core";
 import { buildPhoneBackup, cardChangesText } from "@/src/core";
 import { keepAppForOffline } from "./offline-shell";
 import { getPhoneToken, phoneFetch } from "./phone-auth";
 import { readBackupFile, saveBackupFile } from "./phone-backup";
 import { PhoneCourses, PhoneSetup } from "./phone-courses";
 import { PhoneApiError } from "./phone-http";
+import { PhoneLesson as PhoneLessonPage } from "./phone-lesson";
+import { PhoneLessonStart } from "./phone-lesson-start";
+import { listPhoneLessons, startPhoneLesson } from "./phone-lessons";
+import { formatPhoneHash, parsePhoneHash } from "./phone-route";
+import type { PhoneRoute } from "./phone-route";
 import { PhoneSession } from "./phone-session";
 import { openPhoneSource } from "./phone-source";
 import type { PhoneSource, UpdateResult } from "./phone-source";
 import type { PullProgress } from "./pull-deck";
+import { useOnline } from "./use-online";
 
-/** The course in the address (`#/c/<id>`): a back swipe on the phone leaves the session, a reload keeps it. */
-const readHash = (): string | null => {
+const readRoute = (): PhoneRoute => {
 	try {
-		const m = /^#\/c\/(.+)$/.exec(window.location.hash);
-		return m ? decodeURIComponent(m[1]!) : null;
+		return parsePhoneHash(window.location.hash);
 	} catch {
-		return null;
+		return { kind: "courses" };
 	}
 };
-const writeHash = (courseId: string | null) => {
+/** Show a screen: a back swipe on the phone leaves it, a reload keeps it. `replace` swaps the current address instead of adding one. */
+const writeRoute = (route: PhoneRoute, replace = false) => {
 	try {
-		const next = courseId ? `#/c/${encodeURIComponent(courseId)}` : "";
-		if (window.location.hash !== next) window.history.pushState(null, "", `${window.location.pathname}${next}`);
+		const next = formatPhoneHash(route);
+		if (window.location.hash === next) return;
+		const url = `${window.location.pathname}${next}`;
+		if (replace) window.history.replaceState(null, "", url);
+		else window.history.pushState(null, "", url);
 	} catch {
 		/* no address bar to keep in step with */
 	}
+};
+
+/** One screen back: the browser's own back when there is one to go to, else the course list. */
+const goBack = (fallback: () => void) => {
+	try {
+		if (window.history.length > 1) {
+			window.history.back();
+			return;
+		}
+	} catch {
+		/* no history to walk */
+	}
+	fallback();
 };
 
 /** What an update did, in a sentence. */
@@ -55,12 +76,22 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 	const [source, setSource] = useState<PhoneSource | null>(null);
 	const [fatal, setFatal] = useState<string | null>(null);
 	const [courses, setCourses] = useState<StudyCourseSummary[] | null>(null);
-	const [courseId, setCourseId] = useState<string | null>(null);
+	const [route, setRoute] = useState<PhoneRoute>({ kind: "courses" });
 	const [deviceName, setDeviceName] = useState<string | null>(null);
 	const [error, setError] = useState<string | null>(null);
 	const [updating, setUpdating] = useState<PullProgress | null>(null);
 	const [updated, setUpdated] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
+	const online = useOnline();
+	/** Each course's weak spots (the phone's own answers) and lessons (asked of the Mac while online). */
+	const [weak, setWeak] = useState<Record<string, StudyLinkCard[]>>({});
+	const [lessons, setLessons] = useState<Record<string, PhoneLesson[]>>({});
+	/** The lesson being started: the cards' faces for the draft, and whether the Mac is being asked. */
+	const [faces, setFaces] = useState<StudyLinkCard[] | null>(null);
+	const [starting, setStarting] = useState(false);
+	const [startError, setStartError] = useState<string | null>(null);
+	/** The first message of the lesson just started: the lesson page sends it once, as turn 1. */
+	const [first, setFirst] = useState<{ chatId: string; text: string } | null>(null);
 	const sourceRef = useRef<PhoneSource | null>(null);
 	sourceRef.current = source;
 
@@ -76,8 +107,12 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 		const engine = sourceRef.current?.engine;
 		if (!engine) return;
 		try {
-			setCourses(await engine.api.courses());
+			const list = await engine.api.courses();
+			setCourses(list);
 			setError(null);
+			// from the phone's own answers: a missing list only hides it
+			const entries = await Promise.all(list.map(async (c) => [c.id, await engine.api.weakSpots(c.id).catch(() => [] as StudyLinkCard[])] as const));
+			setWeak(Object.fromEntries(entries));
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		}
@@ -88,7 +123,7 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 			router.replace("/m/pair");
 			return;
 		}
-		setCourseId(readHash());
+		setRoute(readRoute());
 		setReady(true);
 		let live = true;
 		open().then(
@@ -106,10 +141,10 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 				if (res.ok && live) setDeviceName(((await res.json()) as { device: { name: string } }).device.name);
 			})
 			.catch(() => {});
-		const onHash = () => setCourseId(readHash());
+		const onHash = () => setRoute(readRoute());
 		// coming back to the app (the phone was locked, another app was in front): the day may have turned
 		const onVisible = () => {
-			if (document.visibilityState === "visible" && !readHash()) void loadCourses();
+			if (document.visibilityState === "visible" && readRoute().kind === "courses") void loadCourses();
 		};
 		window.addEventListener("hashchange", onHash);
 		window.addEventListener("popstate", onHash);
@@ -123,6 +158,67 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 			document.removeEventListener("visibilitychange", onVisible);
 		};
 	}, [router, open, loadCourses]);
+
+	/** Show a screen (and remember it in the address). */
+	const navigate = useCallback((next: PhoneRoute, replace = false) => {
+		writeRoute(next, replace);
+		setRoute(next);
+	}, []);
+
+	// the course list's lessons live on the Mac: asked while that screen is up and the phone is online; a failed ask only hides them
+	useEffect(() => {
+		if (!courses || route.kind !== "courses" || !online) return;
+		let live = true;
+		void Promise.all(
+			courses.map(
+				async (c) =>
+					[
+						c.id,
+						await listPhoneLessons(c.id).catch((e: unknown) => {
+							onApiError(e);
+							return [] as PhoneLesson[];
+						}),
+					] as const,
+			),
+		).then((entries) => live && setLessons(Object.fromEntries(entries)));
+		return () => {
+			live = false;
+		};
+	}, [courses, route.kind, online, onApiError]);
+
+	// the faces of the cards a lesson is about to start from, from the phone's own copy
+	useEffect(() => {
+		if (route.kind !== "learn") {
+			setFaces(null);
+			setStartError(null);
+			return;
+		}
+		let live = true;
+		void source?.engine?.api.linkCards(route.courseId, route.cardIds).then(
+			(f) => live && setFaces(f),
+			() => {},
+		);
+		return () => {
+			live = false;
+		};
+	}, [route, source]);
+
+	/** Create the lesson on the Mac; its page then sends the first message as turn 1. */
+	const startLesson = async (text: string) => {
+		if (route.kind !== "learn" || starting) return;
+		setStarting(true);
+		setStartError(null);
+		try {
+			const chatId = await startPhoneLesson({ courseId: route.courseId, cardIds: route.cardIds, text });
+			setFirst({ chatId, text });
+			navigate({ kind: "lesson", chatId }, true);
+		} catch (e) {
+			setStartError(e instanceof Error ? e.message : String(e));
+			onApiError(e);
+		} finally {
+			setStarting(false);
+		}
+	};
 
 	const update = useCallback(async () => {
 		const current = sourceRef.current;
@@ -191,9 +287,37 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 	const engine = source.engine;
 	if (!engine) return <PhoneSetup updating={updating} error={error} onStart={() => void update()} />;
 
-	const course = courseId ? courses?.find((c) => c.id === courseId) : undefined;
-	if (courseId && !courses && !error) return <p className="px-4 py-10 text-sm text-muted-foreground">Loading…</p>;
-	if (course) {
+	const routeCourseId = route.kind === "course" || route.kind === "learn" ? route.courseId : null;
+	if (routeCourseId && !courses && !error) return <p className="px-4 py-10 text-sm text-muted-foreground">Loading…</p>;
+	if (route.kind === "lesson") {
+		return (
+			<PhoneLessonPage
+				chatId={route.chatId}
+				firstMessage={first?.chatId === route.chatId ? first.text : undefined}
+				onError={onApiError}
+				onExit={() => {
+					navigate({ kind: "courses" });
+					void loadCourses();
+				}}
+			/>
+		);
+	}
+	const course = routeCourseId ? courses?.find((c) => c.id === routeCourseId) : undefined;
+	if (route.kind === "learn" && course) {
+		return (
+			<PhoneLessonStart
+				courseName={course.name}
+				count={route.cardIds.length}
+				faces={faces}
+				online={online}
+				busy={starting}
+				error={startError}
+				onStart={(text) => void startLesson(text)}
+				onBack={() => goBack(() => navigate({ kind: "courses" }))}
+			/>
+		);
+	}
+	if (route.kind === "course" && course) {
 		return (
 			<PhoneSession
 				api={engine.api}
@@ -203,10 +327,11 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 				unsentOps={() => engine.unsentOps().length}
 				onBackup={saveBackup}
 				notice={notice}
+				online={online}
+				onLearn={(cardId) => navigate({ kind: "learn", courseId: course.id, cardIds: [cardId] })}
 				onExit={() => {
 					setNotice(null);
-					setCourseId(null);
-					writeHash(null);
+					navigate({ kind: "courses" });
 					void loadCourses();
 				}}
 			/>
@@ -223,12 +348,14 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 			updating={updating}
 			updated={updated}
 			notice={notice}
+			weak={weak}
+			lessons={online ? lessons : {}}
+			online={online}
 			onBackup={saveBackup}
 			onRestore={(file) => void restoreBackup(file)}
-			onPick={(c) => {
-				setCourseId(c.id);
-				writeHash(c.id);
-			}}
+			onPick={(c) => navigate({ kind: "course", courseId: c.id })}
+			onLearn={(courseId, cardIds) => navigate({ kind: "learn", courseId, cardIds })}
+			onOpenLesson={(chatId) => navigate({ kind: "lesson", chatId })}
 			onUpdate={() => void update()}
 		/>
 	);

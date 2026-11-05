@@ -8,7 +8,7 @@
  * are read from storage and the same card is rendered again (same step, nothing recorded twice).
  */
 
-import { createMemoryStudyStore, studyAnswer, studyCardAction, studyCourses, studyNext, studyUndo, StudyInputError } from "@/src/core";
+import { clockAt, createMemoryStudyStore, groupReviews, lapsesOf, linkCard, studyAnswer, studyCardAction, studyCourses, studyNext, studyUndo, StudyInputError, weakSpots } from "@/src/core";
 import type { PhoneCardOp, StudyCard, StudyChange, StudyNextResult, StudyReview } from "@/src/core";
 import type { PhoneDb, PhoneMeta } from "./phone-db";
 import { PhoneApiError } from "./phone-http";
@@ -110,9 +110,24 @@ export async function startPhoneEngine(db: PhoneDb, now: () => Date = () => new 
 
 	const api: PhoneStudyApi = {
 		courses: async () => studyCourses(now(), deps),
+		weakSpots: async (courseId) => {
+			const course = store.readCourses().find((c) => c.id === courseId);
+			return course ? weakSpots(course, store.readCards(), groupReviews(store.readReviews()), clockAt(now()).today) : [];
+		},
 		next: (courseId, step, openCardId) => run(courseId, () => studyNext(courseId, step, now(), deps, openCardId)),
 		answer: (input) => run(input.courseId, () => studyAnswer(input, now(), deps)),
 		undo: (input) => run(input.courseId, () => studyUndo(input, now(), deps)),
+		linkCards: async (courseId, cardIds) => {
+			const course = store.readCourses().find((c) => c.id === courseId);
+			if (!course) return [];
+			const today = clockAt(now()).today;
+			const reviews = groupReviews(store.readReviews());
+			const byId = new Map(store.readCards().filter((c) => c.courseId === courseId).map((c) => [c.id, c]));
+			return cardIds.flatMap((id) => {
+				const card = byId.get(id);
+				return card ? [linkCard(card, lapsesOf(course, card, reviews.get(id), today))] : [];
+			});
+		},
 		cardAction: async (input) => {
 			// one moment for the change and for the stamp it leaves on the cards: the Mac compares the two
 			const at = now();

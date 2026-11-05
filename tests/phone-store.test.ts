@@ -661,3 +661,40 @@ describe("card changes made on the phone (Slice 10e)", () => {
 		assert.deepEqual((await db.load())!.ops.map((o) => [o.op.action, o.sent]), [["unsuspend", false]]);
 	});
 });
+
+/** Learned, then forgotten `lapses` times (each Again comes long after the card was due). */
+function forgotten(cardId: string, lapses: number): StudyReview[] {
+	const out: StudyReview[] = [];
+	let t = Date.UTC(2026, 8, 1);
+	const push = (grade: 1 | 3, gap: number) => {
+		t += gap;
+		out.push({ cardId, at: new Date(t).toISOString(), grade });
+	};
+	push(3, 0);
+	push(3, 11 * 60_000);
+	for (let i = 0; i < lapses; i++) {
+		push(1, 40 * 86_400_000);
+		push(3, 11 * 60_000);
+		push(3, 11 * 60_000);
+	}
+	return out;
+}
+
+describe("weak spots on the phone (Slice 10f)", () => {
+	it("lists the cards the course keeps getting wrong from the phone's own answers, most lapses first", async () => {
+		const db = await phoneWith([card("c1"), card("c2"), card("c3"), card("c4")], [...forgotten("c1", 2), ...forgotten("c2", 3), ...forgotten("c3", 1)]);
+		const engine = (await startPhoneEngine(db, () => NOW))!;
+		const weak = await engine.api.weakSpots("k1");
+		assert.deepEqual(weak.map((c) => [c.id, c.lapses]), [["c2", 3], ["c1", 2]]);
+		assert.deepEqual(weak[0], { id: "c2", front: "Q-c2", back: "A-c2", lapses: 3 });
+	});
+
+	it("drops a card once it is paused, and knows no cards of a course it does not have", async () => {
+		const db = await phoneWith([card("c1"), card("c2")], [...forgotten("c1", 2), ...forgotten("c2", 2)]);
+		const engine = (await startPhoneEngine(db, () => NOW))!;
+		assert.equal((await engine.api.weakSpots("k1")).length, 2);
+		await engine.api.cardAction({ courseId: "k1", cardId: "c1", action: "suspend", step: 0 });
+		assert.deepEqual((await engine.api.weakSpots("k1")).map((c) => c.id), ["c2"]);
+		assert.deepEqual(await engine.api.weakSpots("nope"), []);
+	});
+});

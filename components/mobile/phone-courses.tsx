@@ -2,7 +2,8 @@
 
 import { DownloadIcon, GraduationCapIcon, RefreshCwIcon } from "lucide-react";
 import { describeUnsent } from "@/src/core";
-import type { StudyCourseSummary, StudyQueueCounts } from "@/src/core";
+import type { PhoneLesson, StudyCourseSummary, StudyLinkCard, StudyQueueCounts } from "@/src/core";
+import { PhoneLessonList, PhoneWeakSpots } from "./phone-course-extras";
 import type { PullProgress } from "./pull-deck";
 
 /** new · learning · due, the same colours as on the Mac, but big enough to read at a glance. */
@@ -49,7 +50,12 @@ export function PhoneCourses({
 	updating,
 	updated,
 	notice,
+	weak = {},
+	lessons = {},
+	online = true,
 	onPick,
+	onLearn,
+	onOpenLesson,
 	onUpdate,
 	onBackup,
 	onRestore,
@@ -68,7 +74,15 @@ export function PhoneCourses({
 	updated: string | null;
 	/** What the last backup action did, in a sentence. */
 	notice: string | null;
+	/** Each course's weak spots (from this phone's own answers) and lessons (from the Mac; empty while offline). */
+	weak?: Record<string, StudyLinkCard[]>;
+	lessons?: Record<string, PhoneLesson[]>;
+	/** The browser has a connection: lessons run on the Mac, so starting one needs it. */
+	online?: boolean;
 	onPick: (c: StudyCourseSummary) => void;
+	/** Start a lesson on the Mac about these cards of a course. */
+	onLearn?: (courseId: string, cardIds: string[]) => void;
+	onOpenLesson?: (chatId: string) => void;
 	onUpdate: () => void;
 	/** Hand the answers only this phone has to the share sheet. */
 	onBackup: () => void;
@@ -103,22 +117,20 @@ export function PhoneCourses({
 				</p>
 			)}
 			{courses?.map((c) => (
-				<button
-					key={c.id}
-					type="button"
-					onClick={() => onPick(c)}
-					data-testid="phone-course"
-					className="flex min-h-20 w-full items-center gap-4 rounded-xl border bg-card px-4 py-3 text-left active:bg-accent"
-				>
-					<span className="flex min-w-0 flex-1 flex-col gap-0.5">
-						<span className="truncate text-lg">{c.name}</span>
-						<span className="text-xs text-muted-foreground">
-							{c.total} card{c.total === 1 ? "" : "s"}
-							{c.daysLeft !== null && ` · exam in ${c.daysLeft} day${c.daysLeft === 1 ? "" : "s"}`}
+				<div key={c.id} className="overflow-hidden rounded-xl border bg-card" data-testid="phone-course-card">
+					<button type="button" onClick={() => onPick(c)} data-testid="phone-course" className="flex min-h-20 w-full items-center gap-4 px-4 py-3 text-left active:bg-accent">
+						<span className="flex min-w-0 flex-1 flex-col gap-0.5">
+							<span className="truncate text-lg">{c.name}</span>
+							<span className="text-xs text-muted-foreground">
+								{c.total} card{c.total === 1 ? "" : "s"}
+								{c.daysLeft !== null && ` · exam in ${c.daysLeft} day${c.daysLeft === 1 ? "" : "s"}`}
+							</span>
 						</span>
-					</span>
-					<PhoneCounts counts={c.counts} />
-				</button>
+						<PhoneCounts counts={c.counts} />
+					</button>
+					{onLearn && (weak[c.id]?.length ?? 0) > 0 && <PhoneWeakSpots cards={weak[c.id]!} online={online} onLearn={(ids) => onLearn(c.id, ids)} />}
+					{onOpenLesson && (lessons[c.id]?.length ?? 0) > 0 && <PhoneLessonList lessons={lessons[c.id]!} onOpen={onOpenLesson} />}
+				</div>
 			))}
 			<p className="mt-2 text-xs text-muted-foreground/70">
 				<span className="text-sky-400">new</span> · <span className="text-red-400">learning</span> · <span className="text-emerald-400">due</span>

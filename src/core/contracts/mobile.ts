@@ -175,3 +175,14 @@ export interface PhoneSyncResult {
 	/** What happened to the card changes that came with them (Slice 10e). */
 	cardChanges: PhoneCardChangesResult;
 }
+
+/** One lesson as the phone lists it (GET /api/phone/lessons): enough to find it again and see whether it waits for an answer. */
+export interface PhoneLesson {
+	id: string;
+	title: string;
+	updatedAt: string;
+	/** Claude is writing a reply on the Mac right now. */
+	busy: boolean;
+	/** A question is waiting for the learner. */
+	pendingQuestion: boolean;
+}
