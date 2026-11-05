@@ -212,13 +212,22 @@ function nextResult(
 const cleanStep = (step: unknown): number =>
 	typeof step === "number" ? Math.max(0, Math.trunc(step) || 0) : 0;
 
-/** The next card of a course; `step` 0 starts a session. */
+/**
+ * The next card of a course; `step` 0 starts a session. `openCardId` opens that very card first
+ * (a lesson links to the cards it came from, Slice 9) — a card that is gone, suspended or of
+ * another course falls back to the queue's pick, so a stale link never reads as "done for today".
+ */
 export function studyNext(
 	courseId: string,
 	step = 0,
 	now: Date = new Date(),
 	deps: StudyDeps = defaultDeps(),
+	openCardId?: string,
 ): StudyNextResult {
+	if (openCardId) {
+		const open = deps.store.readCards().some((c) => c.id === openCardId && c.courseId === courseId && !c.suspended);
+		if (open) return nextResult(courseId, cleanStep(step), now, deps, openCardId);
+	}
 	return nextResult(courseId, cleanStep(step), now, deps);
 }
 

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { ChevronRightIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { StudyContextData } from "@/src/core";
@@ -10,7 +11,8 @@ import type { StudyContextData } from "@/src/core";
  * flashcards it started from — the first message of a lesson begun for a course or from cards.
  * Scaffolding, not a turn: minimal, muted, collapsed by default (the graph-context card's
  * register); expand reveals what the teacher was told. The model reads the same facts through
- * the marker's own text; this card is the learner's face of it.
+ * the marker's own text; this card is the learner's face of it. Each card links to the review
+ * screen with that card open — the way back from a lesson to its flashcards.
  */
 
 const noun = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -29,6 +31,7 @@ export function StudyContextCard({ data }: { data: StudyContextData }) {
 	const cards = data.cards ?? [];
 	const weak = data.weak ?? [];
 	const exam = examPhrase(course);
+	const cardHref = (id: string) => `/study?course=${encodeURIComponent(course.id)}&card=${encodeURIComponent(id)}`;
 	return (
 		<div data-testid="study-context-card" className="my-1">
 			<button
@@ -65,7 +68,9 @@ export function StudyContextCard({ data }: { data: StudyContextData }) {
 							<div className="font-medium text-foreground/80">Cards this lesson started from</div>
 							{cards.map((c) => (
 								<div key={c.id} data-testid={`study-context-card-${c.id}`} className="leading-relaxed">
-									<span className="text-foreground/80">{c.front}</span>
+									<Link href={cardHref(c.id)} data-testid="study-context-card-open" className="text-foreground/80 underline-offset-2 hover:underline">
+										{c.front}
+									</Link>
 									<span className="text-muted-foreground">
 										{" "}
 										— {c.back} · {noun(c.lapses, "lapse", "lapses")}
@@ -79,7 +84,10 @@ export function StudyContextCard({ data }: { data: StudyContextData }) {
 							<div className="font-medium text-foreground/80">Weakest cards of the course</div>
 							{weak.map((c) => (
 								<div key={c.id} className="leading-relaxed text-muted-foreground">
-									{c.front} · {noun(c.lapses, "lapse", "lapses")}
+									<Link href={cardHref(c.id)} className="underline-offset-2 hover:underline">
+										{c.front}
+									</Link>{" "}
+									· {noun(c.lapses, "lapse", "lapses")}
 								</div>
 							))}
 						</div>

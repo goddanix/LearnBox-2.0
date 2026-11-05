@@ -282,6 +282,40 @@ describe("the server functions", () => {
 	});
 });
 
+describe("opening a named card", () => {
+	// A course of cards that were never reviewed: any of them can be shown, and none has a history
+	// that depends on the clock.
+	beforeEach(() => {
+		stores.stores.studyStore.upsertCourse({ id: "fresh", name: "Fresh", bufferDays: 5, createdAt: NOW.toISOString() });
+		stores.stores.studyStore.upsertCards([
+			...["o1", "o2", "o3"].map((id) => card(id, { courseId: "fresh" })),
+			card("osus", { courseId: "fresh", suspended: true }),
+		]);
+	});
+	const next = (open?: string) => study.studyNext("fresh", 0, NOW, undefined, open).card?.id;
+	const queued = () => next()!;
+	/** A card the queue would not have shown first, so opening it proves the parameter works. */
+	const other = () => ["o1", "o2", "o3"].find((id) => id !== queued())!;
+
+	it("shows exactly that card first, and the queue's pick without one", () => {
+		assert.ok(["o1", "o2", "o3"].includes(queued()));
+		for (const id of ["o1", "o2", "o3"]) assert.equal(next(id), id);
+	});
+
+	it("falls back to the queue for an unknown card, a card of another course or a suspended one", () => {
+		for (const stale of ["nope", "bio1", "osus", ""]) assert.equal(next(stale), queued(), `stale link ${JSON.stringify(stale)}`);
+	});
+
+	it("is the card= parameter of GET /api/study/next", async () => {
+		const route = await import("../app/api/study/next/route.ts");
+		const get = async (query: string) => ((await (await route.GET(new Request(`http://localhost/api/study/next?${query}`))).json()) as { card: { id: string } | null }).card?.id;
+		const target = other();
+		assert.equal(await get(`course=fresh&step=0&card=${target}`), target);
+		assert.notEqual(await get("course=fresh&step=0"), target);
+		assert.notEqual(await get("course=fresh&step=0&card=bio1"), "bio1");
+	});
+});
+
 describe("the routes", () => {
 	const post = async (body: unknown) => {
 		const route = await import("../app/api/chats/route.ts");

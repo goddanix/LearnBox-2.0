@@ -29,6 +29,8 @@ Object.assign(globalThis, {
 	HTMLElement: dom.window.HTMLElement,
 	CustomEvent: dom.window.CustomEvent,
 	Event: dom.window.Event,
+	// next/link's visibility effect schedules through self.requestIdleCallback when there is no IntersectionObserver
+	self: globalThis,
 	IS_REACT_ACT_ENVIRONMENT: true,
 });
 const originalFetch = globalThis.fetch;

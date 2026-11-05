@@ -2,14 +2,25 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeftIcon, BookOpenIcon, CalendarClockIcon, GraduationCapIcon, PauseIcon, PencilIcon, PlusIcon, Undo2Icon } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowLeftIcon, BookOpenIcon, CalendarClockIcon, ChevronRightIcon, GraduationCapIcon, PauseIcon, PencilIcon, PlusIcon, Undo2Icon } from "lucide-react";
 import { useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
 import { STUDY_CHANGED } from "@/components/settings/study-section.tsx";
 import { SidebarToggle, timeAgo } from "@/components/sidebar";
 import { studyApi as api, postJson } from "@/components/study/api";
 import { Button } from "@/components/ui/button";
-import { applyPicked, cardDocument, mcqCorrect, mcqSuggestedGrade } from "@/src/core";
-import type { ChatListItem, StudyCardView, StudyCourseSummary, StudyGrade, StudyNextResult, StudyQueueCounts } from "@/src/core";
+import { cn } from "@/lib/utils";
+import { applyPicked, cardDocument, LESSON_CARDS_MAX, mcqCorrect, mcqSuggestedGrade } from "@/src/core";
+import type {
+	ChatListItem,
+	StudyCardView,
+	StudyCourseSummary,
+	StudyGrade,
+	StudyLinkCard,
+	StudyNextResult,
+	StudyQueueCounts,
+	StudyWeakSpots,
+} from "@/src/core";
 
 /**
  * The review screen. Two states: the course list ("which course?") and one
@@ -25,24 +36,43 @@ const GRADES: { grade: StudyGrade; label: string; tone: string }[] = [
 	{ grade: 4, label: "Easy", tone: "text-sky-400" },
 ];
 
-export function StudyView() {
+/**
+ * `initialCourseId` goes straight into that course and `initialCardId` opens that card first (the
+ * link from a lesson back to its flashcards); both are used once — leaving the session returns
+ * to the course list.
+ */
+export function StudyView({ initialCourseId, initialCardId }: { initialCourseId?: string; initialCardId?: string } = {}) {
 	const [courses, setCourses] = useState<StudyCourseSummary[] | null>(null);
 	const [lessons, setLessons] = useState<ChatListItem[]>([]);
+	const [weak, setWeak] = useState<Record<string, StudyLinkCard[]>>({});
 	const [active, setActive] = useState<StudyCourseSummary | null>(null);
 	const [error, setError] = useState<string | null>(null);
+	const linked = useRef({ course: initialCourseId, card: initialCardId });
 
 	const loadCourses = useCallback(async () => {
 		try {
 			const out = await api<{ courses: StudyCourseSummary[] }>("/api/study/courses");
 			setCourses(out.courses);
 			setError(null);
+			// The weak spots of each course (Learnbox 2.0, Slice 9): a missing list only hides it.
+			const entries = await Promise.all(
+				out.courses.map(async (c) => {
+					try {
+						const w = await api<StudyWeakSpots>(`/api/study/weak?course=${encodeURIComponent(c.id)}`);
+						return [c.id, w.cards] as const;
+					} catch {
+						return [c.id, [] as StudyLinkCard[]] as const;
+					}
+				}),
+			);
+			setWeak(Object.fromEntries(entries));
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
 		}
-		// The lessons that belong to a course (Learnbox 2.0, Slice 9): a missing list only hides them.
+		// The lessons tied to a course or to cards (Slice 9): a missing list only hides them.
 		try {
 			const out = await api<{ chats?: ChatListItem[] }>("/api/chats");
-			setLessons((out.chats ?? []).filter((c) => c.courseId && (c.kind ?? "teach") === "teach"));
+			setLessons((out.chats ?? []).filter((c) => (c.kind ?? "teach") === "teach" && (c.courseId || (c.cardIds?.length ?? 0) > 0)));
 		} catch {
 			setLessons([]);
 		}
@@ -55,18 +85,30 @@ export function StudyView() {
 		return () => window.removeEventListener(STUDY_CHANGED, onChanged);
 	}, [loadCourses]);
 
+	// A link from a lesson: open its course once the list is there (an unknown course shows the list).
+	useEffect(() => {
+		const id = linked.current.course;
+		if (!id || !courses) return;
+		const course = courses.find((c) => c.id === id);
+		if (!course) linked.current = { course: undefined, card: undefined };
+		else setActive(course);
+	}, [courses]);
+
 	return (
 		<div className="flex h-dvh flex-col" data-testid="study-view">
 			{active ? (
 				<Session
 					course={active}
+					lessons={lessons}
+					openCardId={linked.current.course === active.id ? linked.current.card : undefined}
 					onExit={() => {
+						linked.current = { course: undefined, card: undefined };
 						setActive(null);
 						void loadCourses();
 					}}
 				/>
 			) : (
-				<CoursePicker courses={courses} lessons={lessons} error={error} onPick={setActive} />
+				<CoursePicker courses={courses} lessons={lessons} weak={weak} error={error} onPick={setActive} />
 			)}
 		</div>
 	);
@@ -95,14 +137,77 @@ function Counts({ counts, current }: { counts: StudyQueueCounts; current?: "new"
 /** Lessons of a course shown before "+N more". */
 const LESSONS_SHOWN = 5;
 
-/** One course on the start screen: the course row (opens the review session) and, beneath it, the lessons that belong to it. */
+/**
+ * A course's weak spots (Learnbox 2.0, Slice 9): the cards it keeps getting wrong, most lapses
+ * first. Pick some (at most LESSON_CARDS_MAX) and start a lesson on them — the draft opens with
+ * the course, the cards and a suggested first message; nothing is created before it is sent.
+ */
+function WeakSpots({ course, cards, lessons }: { course: StudyCourseSummary; cards: StudyLinkCard[]; lessons: ChatListItem[] }) {
+	const [open, setOpen] = useState(false);
+	const [picked, setPicked] = useState<string[]>([]);
+	if (cards.length === 0) return null;
+	const toggle = (id: string) =>
+		setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : p.length < LESSON_CARDS_MAX ? [...p, id] : p));
+	const full = picked.length >= LESSON_CARDS_MAX;
+	return (
+		<div className="flex flex-col gap-1 border-t px-4 py-2 text-xs" data-testid="study-weak">
+			<button
+				type="button"
+				data-testid="study-weak-toggle"
+				onClick={() => setOpen((v) => !v)}
+				className="flex items-center gap-1.5 self-start text-muted-foreground transition-colors hover:text-foreground"
+			>
+				<ChevronRightIcon aria-hidden="true" className={cn("size-3 transition-transform", open && "rotate-90")} />
+				Weak spots · {cards.length}
+			</button>
+			{open && (
+				<>
+					{cards.map((c) => {
+						const on = picked.includes(c.id);
+						const covered = lessons.some((l) => l.cardIds?.includes(c.id));
+						return (
+							<label key={c.id} data-testid="study-weak-card" className="flex cursor-pointer items-center gap-2 text-muted-foreground">
+								<input type="checkbox" checked={on} disabled={!on && full} onChange={() => toggle(c.id)} className="shrink-0" />
+								<span className="min-w-0 flex-1 truncate text-foreground/80">{c.front}</span>
+								{covered && <BookOpenIcon aria-label="A lesson already covers this card" className="size-3 shrink-0" />}
+								<span className="shrink-0 tabular-nums">{c.lapses} lapses</span>
+							</label>
+						);
+					})}
+					{picked.length > 0 ? (
+						<Link
+							href={`/chat/new?course=${encodeURIComponent(course.id)}&cards=${picked.map(encodeURIComponent).join(",")}`}
+							data-testid="study-weak-learn"
+							className="flex items-center gap-1.5 self-start text-foreground transition-colors hover:underline"
+						>
+							<BookOpenIcon aria-hidden="true" className="size-3" />
+							Learn about these ({picked.length})
+						</Link>
+					) : (
+						<span data-testid="study-weak-hint" className="self-start text-muted-foreground/70">
+							Pick cards to start a lesson on them
+						</span>
+					)}
+					{full && <span className="self-start text-muted-foreground/70">At most {LESSON_CARDS_MAX} cards per lesson</span>}
+				</>
+			)}
+		</div>
+	);
+}
+
+/** One course on the start screen: the course row (opens the review session), the lessons that belong to it and its weak spots. */
 function CourseCard({
 	course: c,
 	lessons,
+	allLessons,
+	weak,
 	onPick,
 }: {
 	course: StudyCourseSummary;
 	lessons: ChatListItem[];
+	/** Every lesson with a course or cards: tells which weak cards a lesson already covers. */
+	allLessons: ChatListItem[];
+	weak: StudyLinkCard[];
 	onPick: (c: StudyCourseSummary) => void;
 }) {
 	const [all, setAll] = useState(false);
@@ -151,6 +256,7 @@ function CourseCard({
 					New lesson
 				</Link>
 			</div>
+			<WeakSpots course={c} cards={weak} lessons={allLessons} />
 		</div>
 	);
 }
@@ -158,12 +264,15 @@ function CourseCard({
 function CoursePicker({
 	courses,
 	lessons,
+	weak,
 	error,
 	onPick,
 }: {
 	courses: StudyCourseSummary[] | null;
-	/** The teaching sessions that belong to a course (from the sessions list). */
+	/** The teaching sessions tied to a course or to cards (from the sessions list). */
 	lessons: ChatListItem[];
+	/** Each course's weak spots, most lapses first. */
+	weak: Record<string, StudyLinkCard[]>;
 	error: string | null;
 	onPick: (c: StudyCourseSummary) => void;
 }) {
@@ -193,7 +302,14 @@ function CoursePicker({
 					</p>
 				)}
 				{courses?.map((c) => (
-					<CourseCard key={c.id} course={c} lessons={lessons.filter((l) => l.courseId === c.id)} onPick={onPick} />
+					<CourseCard
+						key={c.id}
+						course={c}
+						lessons={lessons.filter((l) => l.courseId === c.id)}
+						allLessons={lessons}
+						weak={weak[c.id] ?? []}
+						onPick={onPick}
+					/>
 				))}
 				<p className="text-xs text-muted-foreground/70">
 					<span className="text-sky-400">new</span> · <span className="text-red-400">learning</span> ·{" "}
@@ -221,7 +337,21 @@ function newNonce(): string {
 	return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function Session({ course, onExit }: { course: StudyCourseSummary; onExit: () => void }) {
+function Session({
+	course,
+	lessons,
+	openCardId,
+	onExit,
+}: {
+	course: StudyCourseSummary;
+	/** Lessons tied to cards: the card on screen lists the ones that started from it. */
+	lessons: ChatListItem[];
+	/** The card to show first (a link from a lesson); the queue takes over after it. */
+	openCardId?: string;
+	onExit: () => void;
+}) {
+	const router = useRouter();
+	const firstCard = useRef(openCardId);
 	const [state, setState] = useState<StudyNextResult | null>(null);
 	const [revealed, setRevealed] = useState(false);
 	const [picked, setPicked] = useState<string[]>([]);
@@ -245,7 +375,9 @@ function Session({ course, onExit }: { course: StudyCourseSummary; onExit: () =>
 
 	useEffect(() => {
 		let cancelled = false;
-		api<StudyNextResult>(`/api/study/next?course=${encodeURIComponent(course.id)}&step=0`)
+		// Kept, not consumed: Strict Mode runs this effect twice, and a session has one course.
+		const open = firstCard.current ? `&card=${encodeURIComponent(firstCard.current)}` : "";
+		api<StudyNextResult>(`/api/study/next?course=${encodeURIComponent(course.id)}&step=0${open}`)
 			.then((r) => {
 				if (!cancelled) show(r);
 			})
@@ -274,6 +406,12 @@ function Session({ course, onExit }: { course: StudyCourseSummary; onExit: () =>
 	);
 
 	const card = state?.card ?? null;
+	const cardLessons = useMemo(() => (card ? lessons.filter((l) => l.cardIds?.includes(card.id)) : []), [card, lessons]);
+	/** A lesson on this card (Slice 9): the draft opens with the course, this card and a suggested first message. */
+	const learn = useCallback(() => {
+		if (!card) return;
+		router.push(`/chat/new?course=${encodeURIComponent(course.id)}&cards=${encodeURIComponent(card.id)}`);
+	}, [card, course.id, router]);
 	const suggested: StudyGrade | null = useMemo(
 		() => (card?.kind === "mcq" ? mcqSuggestedGrade(mcqCorrect(card.fields), picked) : null),
 		[card, picked],
@@ -372,7 +510,8 @@ function Session({ course, onExit }: { course: StudyCourseSummary; onExit: () =>
 	);
 
 	// Space/Enter: show answer, then the suggested grade (Good by default). 1–4: grade once the
-	// answer is up. Z undo, S suspend, B bury until tomorrow, E edit.
+	// answer is up. Z undo, S suspend, B bury until tomorrow, E edit, L a lesson on the card (once
+	// the answer is up).
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -402,14 +541,18 @@ function Session({ course, onExit }: { course: StudyCourseSummary; onExit: () =>
 			} else if (key === "e") {
 				e.preventDefault();
 				setEditing(true);
+			} else if (key === "l" && revealed) {
+				e.preventDefault();
+				learn();
 			}
 		};
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
-	}, [state, revealed, editing, suggested, answer, undo, cardAction]);
+	}, [state, revealed, editing, suggested, answer, undo, cardAction, learn]);
 
 	const tools = [
 		{ id: "undo", label: "Undo (Z)", icon: Undo2Icon, run: undo, off: undoStack.length === 0 },
+		{ id: "lesson", label: "Learn about this card (L)", icon: BookOpenIcon, run: learn, off: !card || !revealed },
 		{ id: "edit", label: "Edit card (E)", icon: PencilIcon, run: () => setEditing(true), off: !card },
 		{ id: "bury", label: "Bury until tomorrow (B)", icon: CalendarClockIcon, run: () => cardAction("bury"), off: !card },
 		{ id: "suspend", label: "Suspend card (S)", icon: PauseIcon, run: () => cardAction("suspend"), off: !card },
@@ -484,6 +627,19 @@ function Session({ course, onExit }: { course: StudyCourseSummary; onExit: () =>
 						picked={picked}
 						onPick={setPicked}
 					/>
+					{revealed && cardLessons.length > 0 && (
+						<div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pb-2 text-xs text-muted-foreground" data-testid="study-card-lessons">
+							<span className="flex items-center gap-1.5">
+								<BookOpenIcon aria-hidden="true" className="size-3" />
+								Lessons on this card
+							</span>
+							{cardLessons.map((l) => (
+								<Link key={l.id} href={`/chat/${l.id}`} data-testid="study-card-lesson" className="max-w-xs truncate transition-colors hover:text-foreground hover:underline">
+									{l.title}
+								</Link>
+							))}
+						</div>
+					)}
 					<footer className="flex min-h-20 items-center justify-center border-t px-4 py-3">
 						{revealed ? (
 							<div className="grid w-full max-w-xl grid-cols-4 gap-2">
