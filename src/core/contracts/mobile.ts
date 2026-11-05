@@ -4,6 +4,8 @@
  * plain data; the rules live in core/mobile.ts, the files in store/mobile.ts, the listener in server/mobile-gateway.ts.
  */
 
+import type { StudyCard, StudyCourse, StudyReview } from "./study.ts";
+
 export const MOBILE_SCHEMA = 1;
 
 /** The gateway's fixed port on 127.0.0.1 (Tailscale Serve forwards the tailnet's https to it). */
@@ -82,4 +84,32 @@ export interface PairingOffer {
 	pairUrl?: string;
 	/** The QR code's modules, one string of "0"/"1" per row. */
 	qr?: string[];
+}
+
+// ─── the phone's own copy of the cards (Slice 10c) ───────────────────────────
+
+export const PHONE_DECK_SCHEMA = 1;
+
+/** One media file a card needs, as the Mac holds it. */
+export interface PhoneMediaEntry {
+	name: string;
+	size: number;
+}
+
+/**
+ * What the Mac hands a phone to study from (GET /api/phone/deck): every course and live card, the review ledger from
+ * where the phone stopped, and the list of media files the cards ask for (fetched one by one, GET /api/phone/media/…).
+ */
+export interface PhoneDeck {
+	v: typeof PHONE_DECK_SCHEMA;
+	/** The Mac's clock when the deck was cut. */
+	at: string;
+	courses: StudyCourse[];
+	cards: StudyCard[];
+	/** Review lines of the Mac's ledger from this index on (append order)… */
+	reviewsFrom: number;
+	reviews: StudyReview[];
+	/** …and how many lines the ledger holds in all: the phone asks from here next time. */
+	reviewsTotal: number;
+	media: PhoneMediaEntry[];
 }

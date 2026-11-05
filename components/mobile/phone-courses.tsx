@@ -1,7 +1,8 @@
 "use client";
 
-import { GraduationCapIcon, RefreshCwIcon } from "lucide-react";
+import { DownloadIcon, GraduationCapIcon, RefreshCwIcon } from "lucide-react";
 import type { StudyCourseSummary, StudyQueueCounts } from "@/src/core";
+import type { PullProgress } from "./pull-deck";
 
 /** new · learning · due, the same colours as on the Mac, but big enough to read at a glance. */
 export function PhoneCounts({ counts, current }: { counts: StudyQueueCounts; current?: "new" | "learning" | "review" }) {
@@ -19,27 +20,61 @@ export function PhoneCounts({ counts, current }: { counts: StudyQueueCounts; cur
 	);
 }
 
+/** "just now", "5 min ago", "3 h ago", "2 days ago". */
+export function ago(iso: string, now: Date = new Date()): string {
+	const minutes = Math.max(0, Math.floor((now.getTime() - Date.parse(iso)) / 60_000));
+	if (minutes < 1) return "just now";
+	if (minutes < 60) return `${minutes} min ago`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 48) return `${hours} h ago`;
+	return `${Math.floor(hours / 24)} days ago`;
+}
+
+/** What the update is doing, in words. */
+export function progressText(p: PullProgress): string {
+	if (p.phase === "deck") return "Getting your cards…";
+	return p.total === 0 ? "Pictures are up to date." : `Getting pictures… ${p.done} / ${p.total}`;
+}
+
 /** The phone's start page: which course? */
 export function PhoneCourses({
 	courses,
 	error,
 	deviceName,
+	syncedAt,
+	unsent,
+	updating,
+	updated,
 	onPick,
-	onRefresh,
+	onUpdate,
 }: {
 	courses: StudyCourseSummary[] | null;
 	error: string | null;
 	deviceName?: string | null;
+	/** When the Mac's deck was last taken in. */
+	syncedAt: string;
+	/** Answers given here that the Mac does not have yet. */
+	unsent: number;
+	updating: PullProgress | null;
+	/** What the last update did, in a sentence. */
+	updated: string | null;
 	onPick: (c: StudyCourseSummary) => void;
-	onRefresh: () => void;
+	onUpdate: () => void;
 }) {
 	return (
 		<main className="mx-auto flex min-h-dvh w-full max-w-xl flex-col gap-3 px-4 pb-10 pt-4" data-testid="phone-courses">
 			<header className="flex items-center gap-2 text-muted-foreground">
 				<GraduationCapIcon className="size-5" aria-hidden="true" />
 				<h1 className="flex-1 font-title text-2xl text-foreground">Learnbox</h1>
-				<button type="button" onClick={onRefresh} aria-label="Refresh" className="flex size-11 items-center justify-center rounded-full active:bg-accent" data-testid="phone-refresh">
-					<RefreshCwIcon className="size-5" />
+				<button
+					type="button"
+					onClick={onUpdate}
+					disabled={updating !== null}
+					aria-label="Update from your Mac"
+					className="flex size-11 items-center justify-center rounded-full active:bg-accent disabled:opacity-40"
+					data-testid="phone-update"
+				>
+					<RefreshCwIcon className={`size-5 ${updating ? "animate-spin" : ""}`} />
 				</button>
 			</header>
 			{error && (
@@ -50,7 +85,7 @@ export function PhoneCourses({
 			{courses === null && !error && <p className="text-sm text-muted-foreground">Loading…</p>}
 			{courses?.length === 0 && (
 				<p className="rounded-md border p-4 text-sm text-muted-foreground" data-testid="phone-empty">
-					No courses yet. Import your cards on the Mac, then refresh.
+					No courses yet. Import your cards on the Mac, then update.
 				</p>
 			)}
 			{courses?.map((c) => (
@@ -75,6 +110,38 @@ export function PhoneCourses({
 				<span className="text-sky-400">new</span> · <span className="text-red-400">learning</span> · <span className="text-emerald-400">due</span>
 				{deviceName ? ` · ${deviceName}` : ""}
 			</p>
+			<p className="flex flex-col gap-0.5 text-xs text-muted-foreground" data-testid="phone-sync">
+				<span>{updating ? progressText(updating) : `Cards from your Mac: ${ago(syncedAt)}.`}</span>
+				{updated && !updating && <span data-testid="phone-updated">{updated}</span>}
+				{unsent > 0 && <span data-testid="phone-unsent">{unsent} answer{unsent === 1 ? "" : "s"} only on this phone so far.</span>}
+			</p>
+		</main>
+	);
+}
+
+/** The first run: nothing on the phone yet; the cards come from the Mac. */
+export function PhoneSetup({ updating, error, onStart }: { updating: PullProgress | null; error: string | null; onStart: () => void }) {
+	return (
+		<main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center gap-4 px-4 py-10" data-testid="phone-setup">
+			<h1 className="font-title text-2xl">Learnbox</h1>
+			<p className="text-sm text-muted-foreground">
+				This phone is paired. Get your cards from the Mac (Tailscale on, the Mac awake with Learnbox open) — after that you can study anywhere, with or without a connection.
+			</p>
+			{error && (
+				<p className="rounded-md border border-red-500/40 p-3 text-sm text-red-400" role="alert" data-testid="phone-error">
+					{error}
+				</p>
+			)}
+			<button
+				type="button"
+				onClick={onStart}
+				disabled={updating !== null}
+				className="flex h-14 items-center justify-center gap-2 rounded-xl bg-foreground text-base font-medium text-background disabled:opacity-60"
+				data-testid="phone-get-cards"
+			>
+				<DownloadIcon className="size-5" />
+				{updating ? progressText(updating) : "Get my cards"}
+			</button>
 		</main>
 	);
 }

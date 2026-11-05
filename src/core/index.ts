@@ -69,10 +69,13 @@ export * from "./deadline.ts"; // study: deadline math (ported Deadline Schedule
 export * from "./fsrs.ts"; // study: FSRS review-ledger fold
 export * from "./study-queue.ts"; // study: next-card queue (Deadline Scheduler + StudyQueueOrder rules)
 export * from "./study-render.ts"; // study: card → script-free HTML for the review screen
+export * from "./study-engine.ts"; // study: the queue + answer + card faces over a StudyStore (shared by the Mac and the phone)
 export * from "./study-link.ts"; // study ↔ lessons: weak spots, plain card faces, the study-context marker
 export * from "./graph-course.ts"; // the graph seen through one course's lessons
 export * from "./create.ts"; // create: model-answer parsing + draft rules (PDF → study material)
 export * from "./mobile.ts"; // phone access: gateway route rules, pairing codes, Tailscale status
+export * from "./phone-deck.ts"; // phone: cutting the deck on the Mac, reading it on the phone
+export * from "./memory-study-store.ts"; // study: the ledgers in memory (the phone's working copy, tests)
 export * from "./lesson-cards.ts"; // create: cards from a lesson's statements (statements, drafts, adoption)
 export * from "./anki-import.ts"; // study: pure Anki-row → study mapping
 // settings.ts + settings-resolution.ts (settings-storage wave, 2026-09-19):

@@ -114,7 +114,7 @@ export function serveForwardsTo(raw: unknown, port: number): boolean {
 
 // ─── What the gateway lets through ───────────────────────────────────────────
 
-/** public: anyone who reaches the gateway (the app shell and its font hold no data) · device: needs a paired phone's key · deny: nothing. */
+/** public: anyone who reaches the gateway (the app shell, its service worker and font hold no data) · device: needs a paired phone's key · deny: nothing. */
 export type MobileRouteClass = "public" | "device" | "deny";
 
 /**
@@ -127,7 +127,10 @@ const DEVICE_ROUTES: readonly { method: string; path: string }[] = [
 	{ method: "GET", path: "/api/study/weak" },
 	{ method: "POST", path: "/api/study/answer" },
 	{ method: "POST", path: "/api/study/undo" },
+	{ method: "GET", path: "/api/phone/deck" },
 ];
+/** One media file by name: `/api/phone/media/<name>`, exactly one non-empty segment after the prefix. */
+const MEDIA_PREFIX = ["api", "phone", "media"];
 
 /**
  * Classify one request target. `target` is the path as it came over the wire (no query string). Anything that could
@@ -143,9 +146,10 @@ export function mobileRoute(method: string, target: string): MobileRouteClass {
 	const read = method === "GET" || method === "HEAD";
 	const first = segments[0];
 	if (read && (first === "m" || (first === "_next" && segments[1] === "static" && segments.length > 2))) return "public";
-	if (read && target === "/favicon.ico") return "public";
+	if (read && (target === "/favicon.ico" || target === "/sw.js")) return "public";
 	// the title font (public/fonts/*.ttf): one file name, no sub-folders
 	if (read && first === "fonts" && segments.length === 2 && segments[1] !== "") return "public";
 	const path = target.length > 1 && target.endsWith("/") ? target.slice(0, -1) : target;
+	if (method === "GET" && segments.length === 4 && MEDIA_PREFIX.every((p, i) => segments[i] === p) && segments[3] !== "") return "device";
 	return DEVICE_ROUTES.some((r) => r.method === method && r.path === path) ? "device" : "deny";
 }

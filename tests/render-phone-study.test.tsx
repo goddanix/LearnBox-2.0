@@ -1,7 +1,7 @@
 /**
- * The phone's review screens (Learnbox 2.0, Slice 10b), in a live linkedom page with the study engine faked:
+ * The phone's review screens (Learnbox 2.0, Slices 10b/10c), in a live linkedom page with the phone's source faked:
  * the course list, a session (show answer → grade → next card, undo, done), the pairing guard, the failure
- * banners — and the online engine's mapping of the Mac's study routes.
+ * banners, the first-run setup and the update from the Mac.
  */
 import { dom } from "./helpers/linkedom-page.ts";
 import React, { act } from "react";
@@ -11,9 +11,11 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { createRoot, type Root } from "react-dom/client";
 import { AppRouterContext } from "next/dist/shared/lib/app-router-context.shared-runtime";
-import { PhoneApp } from "../components/mobile/phone-app.tsx";
+import { PhoneApp, updateSummary } from "../components/mobile/phone-app.tsx";
 import { setPhoneToken } from "../components/mobile/phone-auth.ts";
-import { httpStudyApi, PhoneApiError } from "../components/mobile/study-api.ts";
+import { PhoneApiError } from "../components/mobile/phone-http.ts";
+import type { PhoneSource } from "../components/mobile/phone-source.ts";
+import type { PullResult } from "../components/mobile/pull-deck.ts";
 import type { PhoneStudyApi } from "../components/mobile/study-api.ts";
 import type { StudyCardView, StudyCourseSummary, StudyNextResult } from "../src/core/index.ts";
 
@@ -50,13 +52,23 @@ const click = async (el: Element | null) => {
 	await act(async () => { (el as HTMLElement).click(); });
 	await settle();
 };
-async function mount(api: PhoneStudyApi) {
+async function mount(source: PhoneSource | PhoneStudyApi) {
+	const open = async () => ("update" in source ? source : sourceOf(source));
 	const router = { push: () => {}, replace: (href: string) => replaced.push(href), back: () => {}, forward: () => {}, refresh: () => {}, prefetch: () => {} };
 	host = document.createElement("div");
 	document.body.append(host);
 	root = createRoot(host);
-	await act(async () => root!.render(<AppRouterContext.Provider value={router as never}><PhoneApp api={api} /></AppRouterContext.Provider>));
+	await act(async () => root!.render(<AppRouterContext.Provider value={router as never}><PhoneApp open={open} /></AppRouterContext.Provider>));
 	await settle();
+}
+const META = { v: 1 as const, deckAt: "2026-11-05T08:00:00.000Z", syncedAt: new Date(Date.now() - 5 * 60_000).toISOString(), macReviews: 0 };
+const RESULT: PullResult = { cards: 12, courses: 2, reviews: 0, media: 0, mediaFailed: 0 };
+/** A source whose engine is the scripted one; `update` is only there when a test expects it to be used. */
+function sourceOf(api: PhoneStudyApi | null, extra: { unsent?: number; update?: PhoneSource["update"] } = {}): PhoneSource {
+	return {
+		engine: api ? { api, meta: META, unsent: () => extra.unsent ?? 0 } : null,
+		update: extra.update ?? (async () => { throw new Error("no update expected"); }),
+	};
 }
 /** The phone's own `me` answer, so the paired name shows; everything else the screens ask goes to the fake engine. */
 const fakeMe = (name = "Test iPhone") => {
@@ -137,11 +149,12 @@ describe("the pairing guard", () => {
 		assert.deepEqual(api.calls, [], "no study call without a key");
 	});
 
-	it("sends it there too when the Mac says the key is gone", async () => {
+	it("sends it there too when the Mac says the key is gone while updating", async () => {
 		setPhoneToken("KEY");
 		fakeMe();
-		const api = { ...fakeApi([], []), courses: async () => { throw new PhoneApiError("This phone is not paired (any more).", "unpaired"); } };
-		await mount(api);
+		await mount(sourceOf(fakeApi([course("a", "Anatomy")], []), { update: async () => { throw new PhoneApiError("This phone is not paired (any more).", "unpaired"); } }));
+		assert.deepEqual(replaced, [], "studying works without asking the Mac");
+		await click($("phone-update"));
 		assert.deepEqual(replaced, ["/m/pair"]);
 	});
 });
@@ -160,26 +173,118 @@ describe("the course list", () => {
 		assert.match($("phone-courses")!.textContent ?? "", /Danny's iPhone/);
 	});
 
-	it("says so when there is nothing to study, and when the Mac cannot be reached", async () => {
+	it("says so when there is nothing to study", async () => {
 		setPhoneToken("KEY");
 		fakeMe();
 		await mount(fakeApi([], []));
 		assert.ok($("phone-empty"));
-		await act(async () => root!.unmount());
-		host!.remove();
-		const api = { ...fakeApi([], []), courses: async () => { throw new PhoneApiError("Cannot reach your Mac.", "unreachable"); } };
-		await mount(api);
-		assert.match($("phone-error")!.textContent ?? "", /Cannot reach your Mac/);
-		assert.deepEqual(replaced, [], "unreachable is not unpaired");
 	});
 
-	it("refreshes on request", async () => {
+	it("shows when the cards came from the Mac, and how many answers only this phone has", async () => {
+		setPhoneToken("KEY");
+		fakeMe();
+		await mount(sourceOf(fakeApi([course("a", "Anatomy")], []), { unsent: 3 }));
+		assert.match($("phone-sync")!.textContent ?? "", /Cards from your Mac: 5 min ago\./);
+		assert.match($("phone-unsent")!.textContent ?? "", /^3 answers only on this phone so far\.$/);
+		await act(async () => root!.unmount());
+		host!.remove();
+		await mount(sourceOf(fakeApi([course("a", "Anatomy")], []), { unsent: 1 }));
+		assert.match($("phone-unsent")!.textContent ?? "", /^1 answer only/);
+		await act(async () => root!.unmount());
+		host!.remove();
+		await mount(fakeApi([course("a", "Anatomy")], []));
+		assert.equal($("phone-unsent"), null, "nothing to say when everything is on the Mac");
+	});
+});
+
+describe("updating from the Mac", () => {
+	it("shows the progress, then what came, and reads the courses again from the new deck", async () => {
+		setPhoneToken("KEY");
+		fakeMe();
+		const next = fakeApi([course("a", "Anatomy"), course("b", "Biochemistry")], []);
+		let finish!: () => void;
+		const gate = new Promise<void>((r) => (finish = r));
+		const first = sourceOf(fakeApi([course("a", "Anatomy")], []), {
+			update: async (onProgress) => {
+				onProgress({ phase: "media", done: 2, total: 9 });
+				await gate;
+				return { result: { ...RESULT, media: 9, reviews: 2 }, source: sourceOf(next) };
+			},
+		});
+		await mount(first);
+		assert.equal($$("phone-course").length, 1);
+		await click($("phone-update"));
+		assert.match($("phone-sync")!.textContent ?? "", /Getting pictures… 2 \/ 9/);
+		assert.equal($("phone-update")!.hasAttribute("disabled"), true, "one update at a time");
+		await act(async () => finish());
+		await settle();
+		assert.equal($$("phone-course").length, 2);
+		assert.equal($("phone-updated")!.textContent, "Updated: 12 cards, 2 new answers from the Mac, 9 pictures.");
+		assert.equal($("phone-update")!.hasAttribute("disabled"), false);
+		assert.ok(next.calls.includes("courses"));
+	});
+
+	it("keeps the old deck and says why when the Mac cannot be reached", async () => {
 		setPhoneToken("KEY");
 		fakeMe();
 		const api = fakeApi([course("a", "Anatomy")], []);
-		await mount(api);
-		await click($("phone-refresh"));
-		assert.equal(api.calls.filter((c) => c === "courses").length, 2);
+		await mount(sourceOf(api, { update: async () => { throw new PhoneApiError("Cannot reach your Mac.", "unreachable"); } }));
+		await click($("phone-update"));
+		assert.match($("phone-error")!.textContent ?? "", /Cannot reach your Mac/);
+		assert.equal($$("phone-course").length, 1, "the cards on the phone are still there");
+		assert.deepEqual(replaced, [], "unreachable is not unpaired");
+		assert.equal($("phone-updated"), null);
+	});
+
+	it("says what an update did, in a sentence", () => {
+		assert.equal(updateSummary({ cards: 1, courses: 1, reviews: 0, media: 0, mediaFailed: 0 }), "Updated: 1 card.");
+		assert.equal(updateSummary({ cards: 3, courses: 1, reviews: 1, media: 1, mediaFailed: 0 }), "Updated: 3 cards, 1 new answer from the Mac, 1 picture.");
+		assert.equal(updateSummary({ cards: 3, courses: 1, reviews: 0, media: 4, mediaFailed: 2 }), "Updated: 3 cards, 4 pictures. 2 pictures did not come; update again to retry.");
+	});
+});
+
+describe("the first run", () => {
+	it("asks for the cards when the phone has none, and shows the courses once they are in", async () => {
+		setPhoneToken("KEY");
+		fakeMe();
+		let updates = 0;
+		await mount(
+			sourceOf(null, {
+				update: async (onProgress) => {
+					updates += 1;
+					onProgress({ phase: "deck", done: 1, total: 1 });
+					return { result: RESULT, source: sourceOf(fakeApi([course("a", "Anatomy")], [])) };
+				},
+			}),
+		);
+		assert.ok($("phone-setup"));
+		assert.equal($("phone-courses"), null);
+		await click($("phone-get-cards"));
+		assert.equal(updates, 1);
+		assert.equal($("phone-setup"), null);
+		assert.equal($$("phone-course").length, 1);
+	});
+
+	it("stays on the setup screen with the reason when the Mac cannot be reached", async () => {
+		setPhoneToken("KEY");
+		fakeMe();
+		await mount(sourceOf(null, { update: async () => { throw new PhoneApiError("Cannot reach your Mac.", "unreachable"); } }));
+		await click($("phone-get-cards"));
+		assert.ok($("phone-setup"));
+		assert.match($("phone-error")!.textContent ?? "", /Cannot reach your Mac/);
+		assert.equal($("phone-get-cards")!.hasAttribute("disabled"), false, "it can be tried again");
+	});
+
+	it("says so when the phone cannot keep cards at all", async () => {
+		setPhoneToken("KEY");
+		fakeMe();
+		const router = { push: () => {}, replace: () => {}, back: () => {}, forward: () => {}, refresh: () => {}, prefetch: () => {} };
+		host = document.createElement("div");
+		document.body.append(host);
+		root = createRoot(host);
+		await act(async () => root!.render(<AppRouterContext.Provider value={router as never}><PhoneApp open={async () => { throw new Error("This browser cannot keep cards on the phone."); }} /></AppRouterContext.Provider>));
+		await settle();
+		assert.match($("phone-error")!.textContent ?? "", /cannot keep cards/);
 	});
 });
 
@@ -268,58 +373,5 @@ describe("a session", () => {
 	it("labels an MCQ's button Check", async () => {
 		await open([result("a", card("m1", { kind: "mcq", fields: { Q: "q", Answers: "A" } }), 0)]);
 		assert.match($("phone-reveal")!.textContent ?? "", /Check/);
-	});
-});
-
-describe("the online engine", () => {
-	function server(answer: (url: string, init?: RequestInit) => Response | Promise<Response>) {
-		const seen: { url: string; method: string; auth: string | null; body: unknown }[] = [];
-		globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
-			const url = String(input);
-			seen.push({ url, method: init?.method ?? "GET", auth: new Headers(init?.headers).get("Authorization"), body: init?.body ? JSON.parse(String(init.body)) : null });
-			return answer(url, init);
-		}) as typeof fetch;
-		return seen;
-	}
-
-	it("maps the calls onto the Mac's study routes, with the phone's key", async () => {
-		setPhoneToken("KEY123");
-		const seen = server((url) => (url.startsWith("/api/study/courses") ? Response.json({ courses: [course("a", "A")] }) : Response.json(result("a", null, 1))));
-		const api = httpStudyApi();
-		assert.equal((await api.courses())[0]!.id, "a");
-		await api.next("a b", 2, "c 1");
-		await api.answer({ courseId: "a", cardId: "c1", grade: 3, ms: 1200, step: 2 });
-		await api.undo({ courseId: "a", cardId: "c1", step: 2 });
-		assert.deepEqual(
-			seen.map((s) => [s.method, s.url, s.auth]),
-			[
-				["GET", "/api/study/courses", "Bearer KEY123"],
-				["GET", "/api/study/next?course=a%20b&step=2&card=c%201", "Bearer KEY123"],
-				["POST", "/api/study/answer", "Bearer KEY123"],
-				["POST", "/api/study/undo", "Bearer KEY123"],
-			],
-		);
-		assert.deepEqual(seen[2]!.body, { courseId: "a", cardId: "c1", grade: 3, ms: 1200, step: 2 });
-	});
-
-	it("tells unpaired, unreachable and server failures apart", async () => {
-		setPhoneToken("KEY123");
-		const kinds = async (answer: Response | Error) => {
-			server(() => {
-				if (answer instanceof Error) throw answer;
-				return answer.clone();
-			});
-			try {
-				await httpStudyApi().next("a", 0);
-				return "ok";
-			} catch (e) {
-				return e instanceof PhoneApiError ? `${e.kind}: ${e.message}` : "other";
-			}
-		};
-		assert.match(await kinds(new Response("{}", { status: 401 })), /^unpaired/);
-		assert.match(await kinds(new Response("{}", { status: 502 })), /^unreachable/);
-		assert.match(await kinds(new TypeError("Failed to fetch")), /^unreachable: Cannot reach your Mac/);
-		assert.equal(await kinds(new Response(JSON.stringify({ error: "Unknown course" }), { status: 404 })), "server: Unknown course");
-		assert.equal(await kinds(new Response("nope", { status: 500 })), "server: Request failed (500)");
 	});
 });

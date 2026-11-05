@@ -225,6 +225,18 @@ export function renderFace(card: StudyCard, face: CardFace, resolve: MediaResolv
 	return { html: resolveMedia(r.html, resolve), split: r.split };
 }
 
+/** Every media file a card's two faces ask for (decoded names, each once): what a phone has to hold to show the card offline. */
+export function mediaNamesOf(card: StudyCard): string[] {
+	const seen = new Set<string>();
+	const record: MediaResolver = (name) => {
+		seen.add(name);
+		return null;
+	};
+	renderFace(card, "front", record);
+	renderFace(card, "back", record);
+	return [...seen];
+}
+
 // ─── the iframe document ────────────────────────────────────────────────────
 
 export const CARD_CSS = `
