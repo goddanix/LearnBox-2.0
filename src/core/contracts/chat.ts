@@ -35,6 +35,12 @@ export interface ChatRecord {
 	messages: LhMessage[];
 	/** The session's kind — absent = teach (pre-practice records). */
 	kind?: ChatKind;
+	/** The study course (Fach) the lesson belongs to — absent = none (Learnbox 2.0, Slice 9). Set at
+	 *  birth (the draft's Course field, or a card) and changeable later; the teacher hears about the
+	 *  course only through the study-context marker at birth, a later change only regroups. */
+	courseId?: string;
+	/** The flashcards the lesson started from (ids; the marker carries their text). */
+	cardIds?: string[];
 	/** The session's plan tree (vision §2) — written by plan tools via saveTree. */
 	tree?: PlanTree;
 	/** Append-only usage log (observability, 2026-09): one entry per model
@@ -263,6 +269,9 @@ export interface ChatSummary {
 	updatedAt: string;
 	/** Normalized kind (absent record field reads as teach). */
 	kind: ChatKind;
+	/** The study course the lesson belongs to, and the cards it started from (record fields, see ChatRecord). */
+	courseId?: string;
+	cardIds?: string[];
 	messageCount: number;
 	/** The session's current phase, derived from the stored plan tree. */
 	phase: Phase3;

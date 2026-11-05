@@ -12,6 +12,7 @@ export { NotesImportError } from "../agent/subagents/extraction.ts";
 export * from "./commit-positions.ts";
 export * from "./jobs.ts";
 export * from "./study.ts";
+export * from "./study-link.ts";
 export * from "./create.ts";
 export * from "./create-cards.ts";
 export * from "./create-cards-edit.ts";

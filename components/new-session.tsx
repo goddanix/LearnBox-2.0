@@ -12,7 +12,8 @@ import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-
 import { StatsBar } from "@/components/stats-bar";
 import { ChainTableOverlay } from "@/components/chain-table.tsx";
 import { ComposerActions, NodePickerControl } from "@/components/composer-actions";
-import type { ChatSettings, GraphSnapshot } from "@/src/core";
+import { DraftCourseControl } from "@/components/draft-course-control";
+import type { ChatSettings, GraphSnapshot, StudyLessonStart, StudyLinkCard } from "@/src/core";
 
 /** The draft's pick set (owner round 10): the SAME shape the home pick
  *  bar lifts — resolved nodes as the learner SAW them at pick time. */
@@ -45,6 +46,7 @@ export async function startDraftSession(
 	fetchLike: typeof fetch,
 	mode?: "practice",
 	picks?: readonly DraftPick[],
+	study?: StudyLessonStart,
 ): Promise<string | null> {
 	const t = text.trim();
 	if (!t) return null;
@@ -58,7 +60,11 @@ export async function startDraftSession(
 		body: JSON.stringify(
 			mode === "practice"
 				? { title: t, kind: "practice", ...(picks && picks.length > 0 ? { graphContext: { propositions: picks } } : {}) }
-				: { title: t },
+				: {
+						title: t,
+						// The study course (and flashcards) the lesson is for: ids only, the server reads the text.
+						...(study && study.courseId ? { study } : {}),
+					},
 		),
 	});
 	const { id } = (await res.json()) as { id: string };
@@ -82,6 +88,7 @@ export function DraftShell({
 	picks = [],
 	onOpenPicker,
 	onClearPicks,
+	coursePicker,
 	overlay,
 }: {
 	busy: boolean;
@@ -104,6 +111,8 @@ export function DraftShell({
 	picks?: DraftPick[];
 	onOpenPicker?: () => void;
 	onClearPicks?: () => void;
+	/** The course field (Learnbox 2.0, Slice 9): teach drafts only — practice works from the graph. */
+	coursePicker?: ReactNode;
 	/** THE PICKER SLOT (owner round 10b): the chain-table overlay hosts
 	 *  INSIDE the content column's relative container — the same law as
 	 *  the graph view (the overlay fills its column, never the sidebar).
@@ -188,6 +197,7 @@ export function DraftShell({
 									picker={(picks.length > 0 || mode === "practice") && (
 										<NodePickerControl count={picks.length} onOpen={onOpenPicker} onClear={onClearPicks} />
 									)}
+									course={mode === "teach" ? coursePicker : undefined}
 									setup={setupCta}
 								/>
 								<div className="pointer-events-auto overflow-hidden rounded-2xl border bg-card shadow-lg">
@@ -230,14 +240,31 @@ export function DraftShell({
 	);
 }
 
-export function NewSession({ initialConfigured, mode = "teach" }: { initialConfigured: boolean; mode?: "teach" | "practice" }) {
+export function NewSession({
+	initialConfigured,
+	mode = "teach",
+	courses = [],
+	initialCourseId = "",
+	initialCards = [],
+	initialText = "",
+}: {
+	initialConfigured: boolean;
+	mode?: "teach" | "practice";
+	/** The study courses the draft can assign the lesson to (Learnbox 2.0, Slice 9). */
+	courses?: ReadonlyArray<{ id: string; name: string }>;
+	/** A lesson that comes from flashcards (the Study screen): its course, the cards (read server-side
+	 *  from the ledgers) and a suggested first message the learner may change. */
+	initialCourseId?: string;
+	initialCards?: readonly StudyLinkCard[];
+	initialText?: string;
+}) {
 	const router = useRouter();
-	const [text, setText] = useState("");
+	const [text, setText] = useState(initialText);
 	/* The draft MIRROR ("nothing gets lost" round, 2026-10-01): the shell's
 	 * finish-first send calls THIS send after the dictation flush — which
 	 * landed via setState and may not have re-rendered yet. The send reads
 	 * the mirror; every write keeps it current. */
-	const textRef = useRef("");
+	const textRef = useRef(initialText);
 	const applyText = (v: string) => {
 		textRef.current = v;
 		setText(v);
@@ -253,6 +280,16 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 		setPicks(next);
 	};
 	const [pickerOpen, setPickerOpen] = useState(false);
+	// The study course of the lesson, and the flashcards it starts from (cards belong to their
+	// course: choosing another one drops them). Mirrored in a ref like the other picks.
+	const [courseId, setCourseId] = useState(initialCourseId);
+	const [cards, setCards] = useState<readonly StudyLinkCard[]>(initialCards);
+	const studyRef = useRef<StudyLessonStart>({ courseId: initialCourseId, cardIds: initialCards.map((c) => c.id) });
+	const applyStudy = (nextCourse: string, nextCards: readonly StudyLinkCard[]) => {
+		studyRef.current = { courseId: nextCourse, cardIds: nextCards.map((c) => c.id) };
+		setCourseId(nextCourse);
+		setCards(nextCards);
+	};
 	const [snapshot, setSnapshot] = useState<GraphSnapshot | null>(null);
 	const openPicker = () => {
 		if (snapshot) {
@@ -302,7 +339,13 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 			return;
 		}
 		setBusy(true);
-		void startDraftSession(draft, fetch, mode === "practice" ? "practice" : undefined, mode === "practice" ? picksRef.current : undefined)
+		void startDraftSession(
+			draft,
+			fetch,
+			mode === "practice" ? "practice" : undefined,
+			mode === "practice" ? picksRef.current : undefined,
+			mode === "practice" ? undefined : studyRef.current,
+		)
 			.then((target) => {
 				if (target) router.push(target);
 				else setBusy(false);
@@ -321,6 +364,17 @@ export function NewSession({ initialConfigured, mode = "teach" }: { initialConfi
 				picks={picks}
 				onOpenPicker={openPicker}
 				onClearPicks={() => applyPicks([])}
+				coursePicker={
+					courses.length > 0 || courseId !== "" ? (
+						<DraftCourseControl
+							courses={courses}
+							courseId={courseId}
+							cardCount={cards.length}
+							onCourse={(id) => applyStudy(id, id === courseId ? cards : [])}
+							onClearCards={() => applyStudy(courseId, [])}
+						/>
+					) : undefined
+				}
 				overlay={
 					// THE PICKER (owner round 10b): hosted INSIDE the content
 					// column — absolute inset-0 resolves to the column's relative

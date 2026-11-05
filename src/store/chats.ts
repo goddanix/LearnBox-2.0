@@ -32,7 +32,7 @@ function chatFile(id: string): string {
  *  phase, busy, pendingQuestion) is already announced by turn-started /
  *  turn-settled, which the sidebar refetches on. Silence here is law,
  *  not oversight. */
-function createChat(title: string, kind?: "practice"): ChatRecord {
+function createChat(title: string, kind?: "practice", link?: { courseId?: string; cardIds?: string[] }): ChatRecord {
 	const now = new Date().toISOString();
 	const record: ChatRecord = {
 		id: `chat_${Date.now().toString(36)}_${crypto.randomUUID().slice(0, 8)}`,
@@ -43,6 +43,10 @@ function createChat(title: string, kind?: "practice"): ChatRecord {
 		// Practice sessions carry the marker; teach stays ABSENT (absence
 		// reads as teach — pre-practice records never migrate).
 		...(kind === "practice" ? { kind: "practice" as const } : {}),
+		// The study course and the flashcards the lesson starts from (Slice 9);
+		// absent on every session made without them.
+		...(link?.courseId ? { courseId: link.courseId } : {}),
+		...(link?.cardIds && link.cardIds.length > 0 ? { cardIds: [...link.cardIds] } : {}),
 	};
 	fs.mkdirSync(PATHS.chats, { recursive: true });
 	writeChat(record);
@@ -181,6 +185,19 @@ function renameChat(id: string, title: string): ChatRecord {
 	return record;
 }
 
+/** Set or clear the study course of a session (Slice 9). Like a rename it is not conversation
+ *  activity: updatedAt stays put so the sidebar order never churns, but the list SHAPE changes
+ *  (the course mark), so chats-changed announces it. */
+function setChatCourse(id: string, courseId: string | null): ChatRecord {
+	const record = getChat(id);
+	if (!record) throw new Error(`Chat not found: ${id}`);
+	if (courseId) record.courseId = courseId;
+	else delete record.courseId;
+	writeChat(record);
+	emit("chats-changed", {});
+	return record;
+}
+
 /** Delete the session record file entirely (session-deletion wave 6,
  *  owner 2026-09-22). False when the id is unknown — the route turns that
  *  into a 404. The record's graph traces and jobs are the route's
@@ -213,6 +230,7 @@ export const chatStore: ChatStore = {
 	saveTree,
 	saveSettings,
 	renameChat,
+	setChatCourse,
 	deleteChat,
 	appendTurnUsage,
 	appendExtractionUsage,

@@ -1,7 +1,7 @@
 import { chainsForSelection, formatChainLine } from "@/src/core";
-import { newGraphContextMessage, type GraphContextPick } from "@/src/core";
-import { compactionInFlight, createChat, isTurnRunning, listChats, readSettingsRecord, stores, titleFromPrompt } from "@/src/server";
-import type { ChatListItem } from "@/src/core";
+import { newGraphContextMessage, newStudyContextMessage, type GraphContextPick } from "@/src/core";
+import { compactionInFlight, createChat, isTurnRunning, listChats, readSettingsRecord, StudyInputError, studyContextFor, stores, titleFromPrompt } from "@/src/server";
+import type { ChatListItem, StudyContextData } from "@/src/core";
 
 /** The session picker's list: record-derived summaries (phase, pending
  *  question) + live liveness — a running turn marks the session busy
@@ -20,12 +20,29 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-	const body = (await req.json().catch(() => ({}))) as { title?: unknown; kind?: unknown; graphContext?: unknown };
+	const body = (await req.json().catch(() => ({}))) as { title?: unknown; kind?: unknown; graphContext?: unknown; study?: unknown };
 	const title = typeof body.title === "string" ? body.title : "";
 	// Practice sessions (owner, 2026-10-04): kind "practice" marks the
 	// record — the practice agent + its tools from turn 1, no extraction.
 	const kind = body.kind === "practice" ? ("practice" as const) : undefined;
-	const chat = createChat(titleFromPrompt(title || "Untitled session"), kind);
+	// The study course (and the flashcards) a lesson starts for (Learnbox 2.0, Slice 9): the
+	// request names ids, the context is read from the ledgers BEFORE the record exists, so a
+	// stale course or card is a 4xx and never an orphan session. Teach sessions only.
+	const studyRequest = !kind && typeof body.study === "object" && body.study !== null ? (body.study as { courseId?: unknown; cardIds?: unknown }) : undefined;
+	let study: StudyContextData | undefined;
+	if (studyRequest) {
+		try {
+			study = studyContextFor({ courseId: typeof studyRequest.courseId === "string" ? studyRequest.courseId : "", cardIds: studyRequest.cardIds });
+		} catch (err) {
+			if (err instanceof StudyInputError) return Response.json({ error: err.message }, { status: err.status });
+			throw err;
+		}
+	}
+	const chat = createChat(
+		titleFromPrompt(title || "Untitled session"),
+		kind,
+		study ? { courseId: study.course.id, cardIds: study.cards.map((c) => c.id) } : undefined,
+	);
 	// PER-SESSION MODELS (owner, 2026-09-28): a session owns its model +
 	// thinking level from birth — stamped verbatim from the STRONG slot,
 	// the new-session default. From here the strong slot never reaches
@@ -59,13 +76,17 @@ export async function POST(req: Request) {
 					)
 					.slice(0, 64)
 			: [];
+	const markers = [];
+	// The course context leads: it says what the session is for before anything is picked.
+	if (study) markers.push(newStudyContextMessage(study));
 	if (picks.length > 0) {
 		const byId = new Map(stores.graphStore.readNodes().map((n) => [n.id, n]));
 		const pickedNodes = picks.map((p) => byId.get(p.id)).filter((n) => n !== undefined);
 		const chainLines = chainsForSelection(pickedNodes, stores.graphStore.readChains()).map((c) =>
 			formatChainLine(c, Object.fromEntries(byId)),
 		);
-		stores.chatStore.saveMessages(chat.id, [newGraphContextMessage(picks, chainLines)]);
+		markers.push(newGraphContextMessage(picks, chainLines));
 	}
+	if (markers.length > 0) stores.chatStore.saveMessages(chat.id, markers);
 	return Response.json({ id: chat.id, title: chat.title });
 }

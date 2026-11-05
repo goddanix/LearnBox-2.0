@@ -40,8 +40,9 @@ import type { UserSettings } from "./settings.ts";
 export interface ChatStore {
 	/** Create a session record (persisted immediately). */
 	/** Create a session record; kind "practice" marks a practice session
-	 *  (absent = teach, the default). */
-	createChat(title: string, kind?: "practice"): ChatRecord;
+	 *  (absent = teach, the default). `link` stamps the study course and the
+	 *  flashcards the lesson starts from (Learnbox 2.0, Slice 9). */
+	createChat(title: string, kind?: "practice", link?: { courseId?: string; cardIds?: string[] }): ChatRecord;
 	/** The full record, or null if unknown id / corrupt file. */
 	getChat(id: string): ChatRecord | null;
 	/** All sessions, newest activity first (the sidebar's list view). */
@@ -65,6 +66,9 @@ export interface ChatStore {
 	 * Like saveSettings: a rename is NOT conversation activity — updatedAt
 	 * stays put, so sidebar order never churns on a rename. */
 	renameChat(id: string, title: string): ChatRecord;
+	/** Set (or clear, with null) the study course a session belongs to. Like a
+	 *  rename it is NOT conversation activity: updatedAt stays put. */
+	setChatCourse(id: string, courseId: string | null): ChatRecord;
 	/** Delete the session record entirely (session-deletion wave 6, owner
 	 *  2026-09-22). False when the id is unknown. The graph-ledger purge and
 	 *  job cleanup are the caller's choreography (core/graph-deletion.ts +

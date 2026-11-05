@@ -1,6 +1,6 @@
 import { NewSession } from "@/components/new-session";
-import { readSettingsRecord } from "@/src/server";
-import { slotsConfigured } from "@/src/core";
+import { readSettingsRecord, studyCourses, studyLinkCards } from "@/src/server";
+import { slotsConfigured, suggestedFirstMessage, type StudyLinkCard } from "@/src/core";
 
 export const dynamic = "force-dynamic";
 
@@ -18,13 +18,32 @@ export const dynamic = "force-dynamic";
 export default async function NewSessionPage({
 	searchParams,
 }: {
-	searchParams: Promise<{ mode?: string }>;
+	searchParams: Promise<{ mode?: string; course?: string; cards?: string }>;
 }) {
-	const { mode } = await searchParams;
+	const { mode, course, cards } = await searchParams;
+	const teach = mode !== "practice";
+	// A lesson for a course, optionally from flashcards (Learnbox 2.0, Slice 9): the link names
+	// ids only; the course list and the cards' text are read here, from the ledgers. A stale or
+	// foreign link (unknown course or card) simply opens the plain draft.
+	const courses = teach ? studyCourses().map((c) => ({ id: c.id, name: c.name })) : [];
+	let initialCourseId = "";
+	let initialCards: StudyLinkCard[] = [];
+	if (teach && course && courses.some((c) => c.id === course)) {
+		initialCourseId = course;
+		try {
+			initialCards = cards ? studyLinkCards(course, cards.split(",")) : [];
+		} catch {
+			initialCards = [];
+		}
+	}
 	return (
 		<NewSession
 			initialConfigured={slotsConfigured(readSettingsRecord()?.models)}
-			mode={mode === "practice" ? "practice" : "teach"}
+			mode={teach ? "teach" : "practice"}
+			courses={courses}
+			initialCourseId={initialCourseId}
+			initialCards={initialCards}
+			initialText={initialCards.length > 0 ? suggestedFirstMessage(initialCards.length) : ""}
 		/>
 	);
 }

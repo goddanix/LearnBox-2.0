@@ -1,14 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeftIcon, CalendarClockIcon, GraduationCapIcon, PauseIcon, PencilIcon, Undo2Icon } from "lucide-react";
+import Link from "next/link";
+import { ArrowLeftIcon, BookOpenIcon, CalendarClockIcon, GraduationCapIcon, PauseIcon, PencilIcon, PlusIcon, Undo2Icon } from "lucide-react";
 import { useSettingsDialog } from "@/components/settings/settings-dialog.tsx";
 import { STUDY_CHANGED } from "@/components/settings/study-section.tsx";
-import { SidebarToggle } from "@/components/sidebar";
+import { SidebarToggle, timeAgo } from "@/components/sidebar";
 import { studyApi as api, postJson } from "@/components/study/api";
 import { Button } from "@/components/ui/button";
 import { applyPicked, cardDocument, mcqCorrect, mcqSuggestedGrade } from "@/src/core";
-import type { StudyCardView, StudyCourseSummary, StudyGrade, StudyNextResult, StudyQueueCounts } from "@/src/core";
+import type { ChatListItem, StudyCardView, StudyCourseSummary, StudyGrade, StudyNextResult, StudyQueueCounts } from "@/src/core";
 
 /**
  * The review screen. Two states: the course list ("which course?") and one
@@ -26,6 +27,7 @@ const GRADES: { grade: StudyGrade; label: string; tone: string }[] = [
 
 export function StudyView() {
 	const [courses, setCourses] = useState<StudyCourseSummary[] | null>(null);
+	const [lessons, setLessons] = useState<ChatListItem[]>([]);
 	const [active, setActive] = useState<StudyCourseSummary | null>(null);
 	const [error, setError] = useState<string | null>(null);
 
@@ -36,6 +38,13 @@ export function StudyView() {
 			setError(null);
 		} catch (e) {
 			setError(e instanceof Error ? e.message : String(e));
+		}
+		// The lessons that belong to a course (Learnbox 2.0, Slice 9): a missing list only hides them.
+		try {
+			const out = await api<{ chats?: ChatListItem[] }>("/api/chats");
+			setLessons((out.chats ?? []).filter((c) => c.courseId && (c.kind ?? "teach") === "teach"));
+		} catch {
+			setLessons([]);
 		}
 	}, []);
 
@@ -57,7 +66,7 @@ export function StudyView() {
 					}}
 				/>
 			) : (
-				<CoursePicker courses={courses} error={error} onPick={setActive} />
+				<CoursePicker courses={courses} lessons={lessons} error={error} onPick={setActive} />
 			)}
 		</div>
 	);
@@ -83,12 +92,78 @@ function Counts({ counts, current }: { counts: StudyQueueCounts; current?: "new"
 	);
 }
 
+/** Lessons of a course shown before "+N more". */
+const LESSONS_SHOWN = 5;
+
+/** One course on the start screen: the course row (opens the review session) and, beneath it, the lessons that belong to it. */
+function CourseCard({
+	course: c,
+	lessons,
+	onPick,
+}: {
+	course: StudyCourseSummary;
+	lessons: ChatListItem[];
+	onPick: (c: StudyCourseSummary) => void;
+}) {
+	const [all, setAll] = useState(false);
+	const shown = all ? lessons : lessons.slice(0, LESSONS_SHOWN);
+	return (
+		<div className="overflow-hidden rounded-lg border bg-card" data-testid="study-course-card">
+			<button
+				type="button"
+				data-testid="study-course"
+				onClick={() => onPick(c)}
+				className="flex w-full items-center gap-4 px-4 py-3 text-left transition-colors hover:bg-accent"
+			>
+				<span className="flex min-w-0 flex-1 flex-col">
+					<span className="truncate text-base">{c.name}</span>
+					<span className="text-xs text-muted-foreground">
+						{c.total} cards
+						{c.daysLeft !== null && ` · exam in ${c.daysLeft} day${c.daysLeft === 1 ? "" : "s"} (${c.newQuota} new/day)`}
+					</span>
+				</span>
+				<Counts counts={c.counts} />
+			</button>
+			<div className="flex flex-col gap-1 border-t px-4 py-2 text-xs" data-testid="study-lessons">
+				{shown.map((l) => (
+					<Link
+						key={l.id}
+						href={`/chat/${l.id}`}
+						data-testid="study-lesson"
+						className="flex items-center gap-2 text-muted-foreground transition-colors hover:text-foreground"
+					>
+						<BookOpenIcon aria-hidden="true" className="size-3 shrink-0" />
+						<span className="min-w-0 flex-1 truncate">{l.title}</span>
+						<span className="shrink-0 tabular-nums">{timeAgo(l.updatedAt)}</span>
+					</Link>
+				))}
+				{!all && lessons.length > LESSONS_SHOWN && (
+					<button type="button" onClick={() => setAll(true)} className="self-start text-muted-foreground hover:text-foreground" data-testid="study-lessons-more">
+						+{lessons.length - LESSONS_SHOWN} more
+					</button>
+				)}
+				<Link
+					href={`/chat/new?course=${encodeURIComponent(c.id)}`}
+					data-testid="study-new-lesson"
+					className="flex items-center gap-1.5 self-start text-muted-foreground transition-colors hover:text-foreground"
+				>
+					<PlusIcon aria-hidden="true" className="size-3" />
+					New lesson
+				</Link>
+			</div>
+		</div>
+	);
+}
+
 function CoursePicker({
 	courses,
+	lessons,
 	error,
 	onPick,
 }: {
 	courses: StudyCourseSummary[] | null;
+	/** The teaching sessions that belong to a course (from the sessions list). */
+	lessons: ChatListItem[];
 	error: string | null;
 	onPick: (c: StudyCourseSummary) => void;
 }) {
@@ -118,22 +193,7 @@ function CoursePicker({
 					</p>
 				)}
 				{courses?.map((c) => (
-					<button
-						key={c.id}
-						type="button"
-						data-testid="study-course"
-						onClick={() => onPick(c)}
-						className="flex items-center gap-4 rounded-lg border bg-card px-4 py-3 text-left transition-colors hover:bg-accent"
-					>
-						<span className="flex min-w-0 flex-1 flex-col">
-							<span className="truncate text-base">{c.name}</span>
-							<span className="text-xs text-muted-foreground">
-								{c.total} cards
-								{c.daysLeft !== null && ` · exam in ${c.daysLeft} day${c.daysLeft === 1 ? "" : "s"} (${c.newQuota} new/day)`}
-							</span>
-						</span>
-						<Counts counts={c.counts} />
-					</button>
+					<CourseCard key={c.id} course={c} lessons={lessons.filter((l) => l.courseId === c.id)} onPick={onPick} />
 				))}
 				<p className="text-xs text-muted-foreground/70">
 					<span className="text-sky-400">new</span> · <span className="text-red-400">learning</span> ·{" "}

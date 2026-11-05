@@ -55,6 +55,7 @@ export interface StudyDeps {
 }
 
 const defaultDeps = (): StudyDeps => ({ store: studyStore, mediaDir: PATHS.studyMedia });
+export const defaultStudyDeps = defaultDeps;
 
 const MIME: Record<string, string> = {
 	".png": "image/png",

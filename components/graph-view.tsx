@@ -67,7 +67,7 @@ import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, use
 import { NotesImportErrors, useNotesImport } from "@/components/notes-import.tsx";
 import Link from "next/link";
 import { FileTextIcon, ListTreeIcon, Loader2Icon, SearchIcon, SettingsIcon, UploadIcon, WaypointsIcon } from "lucide-react";
-import { incrementalLayout, propositionSessionHref, type GraphCostSummary, type GraphNode, type GraphSnapshot } from "@/src/core";
+import { courseNodeIds, incrementalLayout, propositionSessionHref, type ChatListItem, type GraphCostSummary, type GraphNode, type GraphSnapshot } from "@/src/core";
 import { planCostLabel } from "@/components/usage-format";
 import { GraphCanvasRenderer, type GraphRenderSettings } from "./graph-canvas.ts";
 import { usePopoverDismiss } from "@/components/popover-dismiss";
@@ -1071,6 +1071,21 @@ export function GraphView({
 		return set;
 	}, [snapshot, query]);
 
+	// The graph through one course (Learnbox 2.0, Slice 9): the courses that have lessons, and
+	// the filter's choice. The course's part is the propositions its lessons touched
+	// (core/graph-course.ts); it narrows what the search lets through, nothing is refetched.
+	const [courseOptions, setCourseOptions] = useState<Array<{ id: string; name: string; chatIds: string[] }>>([]);
+	const [courseFilter, setCourseFilter] = useState("");
+	const courseIds = useMemo(() => {
+		if (!snapshot || courseFilter === "") return null;
+		const option = courseOptions.find((c) => c.id === courseFilter);
+		return courseNodeIds(snapshot, new Set(option?.chatIds ?? []));
+	}, [snapshot, courseFilter, courseOptions]);
+	const shownIds = useMemo(
+		() => (courseIds ? new Set([...visibleIds].filter((id) => courseIds.has(id))) : visibleIds),
+		[visibleIds, courseIds],
+	);
+
 	// Fetch the derived graph. Re-runs when a background pipeline run
 	// finishes (refreshTick) — its merges just landed in the ledger.
 	const [refreshTick, setRefreshTick] = useState(0);
@@ -1091,6 +1106,30 @@ export function GraphView({
 				if (!cancelled) setSnapshot(data);
 			})
 			.catch((err) => console.error("[graph] fetch failed:", err));
+		return () => {
+			cancelled = true;
+		};
+	}, [refreshTick]);
+
+	// The courses that have teaching sessions, with the sessions' ids (the filter's options).
+	useEffect(() => {
+		let cancelled = false;
+		Promise.all([
+			fetch("/api/study/courses").then((r) => r.json() as Promise<{ courses?: Array<{ id: string; name: string }> }>),
+			fetch("/api/chats").then((r) => r.json() as Promise<{ chats?: ChatListItem[] }>),
+		])
+			.then(([c, l]) => {
+				if (cancelled) return;
+				const lessons = (l.chats ?? []).filter((x) => x.courseId && (x.kind ?? "teach") === "teach");
+				setCourseOptions(
+					(c.courses ?? [])
+						.map((course) => ({ id: course.id, name: course.name, chatIds: lessons.filter((x) => x.courseId === course.id).map((x) => x.id) }))
+						.filter((course) => course.chatIds.length > 0),
+				);
+			})
+			.catch(() => {
+				/* no filter without the lists */
+			});
 		return () => {
 			cancelled = true;
 		};
@@ -1447,10 +1486,10 @@ export function GraphView({
 	// Feed #3 — visibility: hidden nodes drop out of rendering, picking,
 	// hover, AND labels; edges drop when either endpoint is hidden.
 	useEffect(() => {
-		rendererRef.current?.setVisible(query.trim() ? visibleIds : null);
+		rendererRef.current?.setVisible(query.trim() || courseIds ? shownIds : null);
 		// The open detail card cannot outlive its node's visibility.
-		setSelected((sel) => (sel && visibleIds.has(sel.node.id) ? sel : null));
-	}, [visibleIds, query]);
+		setSelected((sel) => (sel && shownIds.has(sel.node.id) ? sel : null));
+	}, [shownIds, query, courseIds]);
 
 	// Feed #4 — region tuning. `isEmpty` in the deps (same as Feed #2):
 	// the settings fetch resolves BEFORE the snapshot creates the renderer,
@@ -1614,6 +1653,24 @@ export function GraphView({
 					changeSettings={changeSettings}
 					onOpenChains={() => setChainsOpen(true)}
 				/>
+				{/* The course filter (Learnbox 2.0, Slice 9): only the part of the graph the
+				    lessons of one course touched. Out when no course has a lesson yet. */}
+				{!isEmpty && courseOptions.length > 0 && (
+					<select
+						aria-label="Show one course"
+						data-testid="graph-course-filter"
+						value={courseFilter}
+						onChange={(e) => setCourseFilter(e.target.value)}
+						className="pointer-events-auto h-8 rounded-md border border-border/60 bg-background/80 px-2 text-xs text-muted-foreground outline-none"
+					>
+						<option value="">All courses</option>
+						{courseOptions.map((c) => (
+							<option key={c.id} value={c.id}>
+								{c.name}
+							</option>
+						))}
+					</select>
+				)}
 			</div>
 
 			<NotesImportErrors errors={notesImport.errors} />

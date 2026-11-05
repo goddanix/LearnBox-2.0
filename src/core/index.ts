@@ -69,6 +69,8 @@ export * from "./deadline.ts"; // study: deadline math (ported Deadline Schedule
 export * from "./fsrs.ts"; // study: FSRS review-ledger fold
 export * from "./study-queue.ts"; // study: next-card queue (Deadline Scheduler + StudyQueueOrder rules)
 export * from "./study-render.ts"; // study: card → script-free HTML for the review screen
+export * from "./study-link.ts"; // study ↔ lessons: weak spots, plain card faces, the study-context marker
+export * from "./graph-course.ts"; // the graph seen through one course's lessons
 export * from "./create.ts"; // create: model-answer parsing + draft rules (PDF → study material)
 export * from "./anki-import.ts"; // study: pure Anki-row → study mapping
 // settings.ts + settings-resolution.ts (settings-storage wave, 2026-09-19):

@@ -55,8 +55,10 @@ import { SessionMessageNavigation } from "@/components/session-navigation";
 import { PracticeDock } from "@/components/practice-dock";
 import { ThinkingCard, type PracticeThinkingData } from "@/components/practice-cards";
 import { GraphContextCard, type GraphContextData } from "@/components/graph-context-card";
+import { StudyContextCard } from "@/components/study-context-card";
+import { SessionCourseChip } from "@/components/session-course-chip";
 import { TopBar } from "@/components/top-bar";
-import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, QuestionFormDraft, TurnUsage, SessionPricing } from "@/src/core";
+import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, QuestionFormDraft, StudyContextData, TurnUsage, SessionPricing } from "@/src/core";
 import type { LhViewMessage } from "@/src/core";
 import { PhaseChip, PhaseDivider } from "@/components/phase-divider";
 import {
@@ -203,10 +205,13 @@ export function Chat({
 	initiallyCompacting = false,
 	initialConfigured = false,
 	kind = "teach",
+	courseId = null,
 }: {
 	chatId: string;
 	title: string;
 	initialMessages: LhMessage[];
+	/** The study course the lesson belongs to (Learnbox 2.0, Slice 9); null = none. */
+	courseId?: string | null;
 	/** Memory-only settlement notice supplied on reopening. */
 	initialError?: string;
 	/** The session kind (practice sessions, owner 2026-10-04): practice
@@ -1271,6 +1276,9 @@ export function Chat({
 							<div className="min-w-4 flex-1" aria-hidden="true" />
 					</>
 					)}
+					{/* The study course of a lesson (Learnbox 2.0, Slice 9): teaching
+					    sessions only — practice works from the graph. */}
+					{kind !== "practice" && <SessionCourseChip chatId={chatId} courseId={courseId} />}
 					{/* The plan chip (owner, plan-placement round): session-level
 					    structure beside the phase chip — access to the full-DAG popup
 					    at every width; the marginalia is the wide-screen glance view. */}
@@ -1359,6 +1367,8 @@ export function Chat({
 										switch (part.type) {
 											case "data-graph-context":
 												return <GraphContextCard key={pi} data={part.data as GraphContextData} />;
+											case "data-study-context":
+												return <StudyContextCard key={pi} data={part.data as StudyContextData} />;
 											case "data-compaction":
 												return <CompactionMomentDivider key={pi} data={part.data as CompactionDividerData} />;
 											case "data-compaction-cut":

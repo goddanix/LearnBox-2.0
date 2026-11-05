@@ -288,10 +288,13 @@ export function SessionRow({
 	onOpen,
 	kbdSelected = false,
 	onContextMenu,
+	courseName,
 }: {
 	chat: ChatListItem;
 	active: boolean;
 	onOpen: () => void;
+	/** The study course the lesson belongs to (Learnbox 2.0, Slice 9), shown as a mark in the meta line. */
+	courseName?: string;
 	/** Keyboard-cycle highlight (shortcut wave A: Alt+↑/↓ + Alt+Enter) —
 	 *  visually distinct from the active session, which stays filled. */
 	kbdSelected?: boolean;
@@ -318,7 +321,10 @@ export function SessionRow({
 				    rule, finally applied to the picker too (owner, typography
 				    round): mono = chrome, Source Sans = human words. */}
 				<span className="block truncate font-prose text-(length:--lh-prose-size)">{chat.title}</span>
-				<span className="block text-xs text-muted-foreground">{sessionMeta(chat)}</span>
+				<span className="block truncate text-xs text-muted-foreground">
+					{courseName ? <span data-testid="session-course" className="text-foreground/70">{courseName} · </span> : null}
+					{sessionMeta(chat)}
+				</span>
 			</span>
 			{/* The dumbbell rides the FAR RIGHT (owner round 6, 2026-10-05) —
 			    was left of the name; right-aligned keeps the titles flush with
@@ -385,20 +391,39 @@ export function RenameRow({ chat, onCommit, onCancel }: { chat: ChatListItem; on
  *  snapshot, persisted in localStorage, defaulting to All. */
 export type SessionKindFilter = "teach" | "all" | "practice";
 const KIND_FILTER_KEY = "lh:session-kind-filter";
+/** The course filter (Learnbox 2.0, Slice 9): "" = every course, "none" = lessons without one, else a course id. */
+const COURSE_FILTER_KEY = "lh:session-course-filter";
 
 function SessionsSidebar() {
 	const { open, toggle } = useSidebar();
 	const [chats, setChats] = useState<ChatListItem[] | null>(null);
 	const [query, setQuery] = useState("");
 	const [kindFilter, setKindFilter] = useState<SessionKindFilter>("all");
+	const [courseFilter, setCourseFilter] = useState("");
+	const [courses, setCourses] = useState<Array<{ id: string; name: string }>>([]);
 	useEffect(() => {
 		const stored = window.localStorage.getItem(KIND_FILTER_KEY);
 		if (stored === "teach" || stored === "all" || stored === "practice") setKindFilter(stored);
+		setCourseFilter(window.localStorage.getItem(COURSE_FILTER_KEY) ?? "");
 	}, []);
 	const setFilter = useCallback((f: SessionKindFilter) => {
 		setKindFilter(f);
 		window.localStorage.setItem(KIND_FILTER_KEY, f);
 	}, []);
+	const setCourse = useCallback((c: string) => {
+		setCourseFilter(c);
+		window.localStorage.setItem(COURSE_FILTER_KEY, c);
+	}, []);
+	const loadCourses = useCallback(() => {
+		void fetch("/api/study/courses")
+			.then((r) => r.json() as Promise<{ courses?: Array<{ id: string; name: string }> }>)
+			.then((j) => setCourses((j.courses ?? []).map((c) => ({ id: c.id, name: c.name }))))
+			.catch(() => {
+				/* no course list: the marks and the filter stay out */
+			});
+	}, []);
+	useEffect(() => loadCourses(), [loadCourses]);
+	const courseNames = useMemo(() => new Map(courses.map((c) => [c.id, c.name])), [courses]);
 	const pathname = usePathname();
 	const router = useRouter();
 	const { open: openSettings } = useSettingsDialog();
@@ -420,6 +445,9 @@ function SessionsSidebar() {
 		if (list && kindFilter !== "all") {
 			list = list.filter((c) => (c.kind ?? "teach") === kindFilter);
 		}
+		if (list && courseFilter !== "") {
+			list = list.filter((c) => (courseFilter === "none" ? !c.courseId : c.courseId === courseFilter));
+		}
 		if (!list) return list;
 		if (!q) return list;
 		return list
@@ -427,7 +455,7 @@ function SessionsSidebar() {
 			.filter((r): r is { c: (typeof list)[number]; score: number } => r.score !== null)
 			.sort((a, b) => b.score - a.score)
 			.map((r) => r.c);
-	}, [chats, query, kindFilter]);
+	}, [chats, query, kindFilter, courseFilter]);
 
 	const refreshInFlightRef = useRef(false);
 	const refresh = useCallback(async () => {
@@ -510,6 +538,7 @@ function SessionsSidebar() {
 		}, 250);
 	};
 	useServerEvent("chats-changed", scheduleEventRefresh);
+	useServerEvent("chats-changed", loadCourses);
 	useServerEvent("turn-started", scheduleEventRefresh);
 	useServerEvent("turn-settled", scheduleEventRefresh);
 	useServerEvent("compaction-changed", scheduleEventRefresh);
@@ -823,6 +852,25 @@ function SessionsSidebar() {
 					))}
 				</div>
 
+				{/* The course filter (Learnbox 2.0, Slice 9): only once there is a course to filter by. */}
+				{courses.length > 0 && (
+					<select
+						aria-label="Filter lessons by course"
+						data-testid="session-course-filter"
+						value={courseFilter}
+						onChange={(e) => setCourse(e.target.value)}
+						className="mx-3 mt-1.5 rounded-md border border-border/60 bg-background px-2 py-1 text-[11px] uppercase tracking-wider text-muted-foreground outline-none"
+					>
+						<option value="">All courses</option>
+						{courses.map((c) => (
+							<option key={c.id} value={c.id}>
+								{c.name}
+							</option>
+						))}
+						<option value="none">No course</option>
+					</select>
+				)}
+
 				<div ref={listRef} className="flex-1 overflow-y-auto p-2">
 					{shown === null ? (
 						<div className="px-2 py-4 text-xs text-muted-foreground">Loading…</div>
@@ -843,6 +891,7 @@ function SessionsSidebar() {
 								<SessionRow
 									key={c.id}
 									chat={c}
+									courseName={c.courseId ? courseNames.get(c.courseId) : undefined}
 									active={pathname === `/chat/${c.id}`}
 									kbdSelected={i === kbdIndex}
 									onOpen={() => {

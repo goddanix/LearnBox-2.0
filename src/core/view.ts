@@ -381,6 +381,16 @@ function projectMarker(marker: LhMarkerMessage, out: LhViewMessage[]): void {
 			});
 			return;
 		}
+		case "study-context": {
+			// The session's course and flashcard context (Learnbox 2.0, Slice 9):
+			// same user-side scaffolding register as the other context cards.
+			out.push({
+				id: marker.id,
+				role: "user",
+				parts: [{ type: "data-study-context", id: `sc_${marker.id}`, data: marker.details }],
+			});
+			return;
+		}
 		case "probe-handoff": {
 			out.push({
 				id: marker.id,
