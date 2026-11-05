@@ -175,11 +175,11 @@ export interface CreateJobDetail {
 	pages: CreateJobPageView[];
 }
 
-/** A refusal the create routes map to a clean 4xx — never a crash. */
+/** A refusal the create routes map to a clean 4xx (or 502 when Claude failed) — never a crash. */
 export class CreateInputError extends Error {
 	constructor(
 		message: string,
-		readonly status: 400 | 404 | 409,
+		readonly status: 400 | 404 | 409 | 502,
 	) {
 		super(message);
 		this.name = "CreateInputError";

@@ -28,6 +28,11 @@ const drawing = globalThis as typeof globalThis & { __lbCardPagesDrawing?: Set<s
 const busy = (drawing.__lbCardPagesDrawing ??= new Set<string>());
 const pageKey = (id: string, page: number) => `${id}:${page}`;
 
+/** Is the page free to change — neither being processed nor having its pictures drawn? */
+export function pageIsFree(job: CardsJob, page: number): boolean {
+	return job.pages[String(page)]?.status !== "running" && !busy.has(pageKey(job.id, page));
+}
+
 /** A page of a job that may be changed now: its record and its drafts. */
 function editablePage(id: string, page: number, deps: CreateDeps): { job: CardsJob; result: CardPageResult } {
 	const job = requireCards(id, deps);
@@ -239,17 +244,14 @@ export function semanticGroups(id: string, deps: CreateDeps = defaultCreateDeps(
 	return resolveSemanticGroups(deps.create.readDedupeCache(id).groups, allPages(job, deps).flatMap((p) => p.cards));
 }
 
-/**
- * Throw the cards of duplicate groups away (soft, restorable; the note names the card kept). Cards that are study
- * cards already stay, and so does every card some group keeps — groups overlap (the quick comparison and Claude's
- * check can name the same card), and two groups keeping each other's cards must not remove both. Returns how many were removed.
- */
-export function removeDuplicates(id: string, groups: readonly { keep: string; remove: readonly string[] }[], deps: CreateDeps = defaultCreateDeps()): number {
-	const kept = new Set(groups.map((g) => g.keep));
-	const keepOf = new Map<string, string>();
-	for (const g of groups) for (const cardId of g.remove) if (!kept.has(cardId)) keepOf.set(cardId, g.keep);
-	const pageNos = new Set([...keepOf.keys()].flatMap((cardId) => pageOfCardId(cardId) ?? []));
-	const pages = [...pageNos].map((page) => editablePage(id, page, deps).result); // all pages must be free before one is changed
+/** The pages holding the cards to remove, all of them free (nothing is changed unless every page can be). */
+export function pagesToClear(id: string, cardIds: Iterable<string>, deps: CreateDeps): CardPageResult[] {
+	const pageNos = new Set([...cardIds].flatMap((cardId) => pageOfCardId(cardId) ?? []));
+	return [...pageNos].map((page) => editablePage(id, page, deps).result);
+}
+
+/** Throw the named cards of already freed pages away (soft; the note names the card kept). Study cards stay. Returns how many were removed. */
+export function clearCards(id: string, pages: readonly CardPageResult[], keepOf: ReadonlyMap<string, string>, deps: CreateDeps): number {
 	let removed = 0;
 	for (const result of pages) {
 		let touched = false;
@@ -266,28 +268,39 @@ export function removeDuplicates(id: string, groups: readonly { keep: string; re
 	return removed;
 }
 
+/**
+ * Throw the cards of duplicate groups away (soft, restorable; the note names the card kept). Cards that are study
+ * cards already stay, and so does every card some group keeps — groups overlap (the quick comparison and Claude's
+ * check can name the same card), and two groups keeping each other's cards must not remove both. Returns how many were removed.
+ */
+export function removeDuplicates(id: string, groups: readonly { keep: string; remove: readonly string[] }[], deps: CreateDeps = defaultCreateDeps()): number {
+	const kept = new Set(groups.map((g) => g.keep));
+	const keepOf = new Map<string, string>();
+	for (const g of groups) for (const cardId of g.remove) if (!kept.has(cardId)) keepOf.set(cardId, g.keep);
+	return clearCards(id, pagesToClear(id, keepOf.keys(), deps), keepOf, deps);
+}
+
 /** Cards per call of the content check. */
 const SEMANTIC_BATCH_CARDS = 30;
 
 /**
- * ONE step of the content check: the next not-yet-checked candidate cards go to Claude, which says which of them
- * ask for the same thing. What was checked is kept per job — a card is asked about once, never again — so repeating
- * the step works through the whole backlog. Finds what the quick comparison misses: the same question worded
- * differently, or one label at quite another place of a figure. Nothing is removed on its own. A failed call
- * (sign-in, network, unreadable answer) leaves the progress untouched and reports the error.
+ * ONE step of the content check over some drafts (a job's, or — with refs — a subject's): the next not-yet-checked
+ * candidate cards go to Claude, which says which of them ask for the same thing. What was checked is kept under
+ * `cacheKey` — a card is asked about once, never again — so repeating the step works through the whole backlog.
+ * Finds what the quick comparison misses: the same question worded differently, or one label at quite another place
+ * of a figure. Nothing is removed on its own. A failed call (sign-in, network, unreadable answer) leaves the progress
+ * untouched and reports the error.
  */
-export async function semanticDedupeStep(
-	id: string,
-	opts: { threshold?: number; signal?: AbortSignal } = {},
-	deps: CardsDeps = defaultCardsDeps(),
+export async function semanticStepOver(
+	scope: { pages: readonly { cards: readonly CardDraft[] }[]; cacheKey: string; cwd: string; threshold?: number; signal?: AbortSignal },
+	deps: Pick<CreateDeps, "create" | "ask" | "retryDelayMs">,
 ): Promise<SemanticStep> {
-	const job = requireCards(id, deps);
-	const pages = allPages(job, deps);
-	const cache = deps.create.readDedupeCache(id);
+	const { pages } = scope;
+	const cache = deps.create.readDedupeCache(scope.cacheKey);
 	const checked = new Set(cache.checked);
 	const groupsNow = () => resolveSemanticGroups(cache.groups, pages.flatMap((p) => p.cards));
 
-	const weak = weakCandidates(pages, opts.threshold ?? DEFAULT_THRESHOLD);
+	const weak = weakCandidates(pages, scope.threshold ?? DEFAULT_THRESHOLD);
 	const unchecked = (w: { a: CardDraft; b: CardDraft }) => !checked.has(w.a.id) || !checked.has(w.b.id);
 	const pending = weak.filter(unchecked).sort((x, y) => y.score - x.score);
 	if (pending.length === 0) return { checkedNow: 0, remaining: 0, groups: groupsNow(), done: true, error: null };
@@ -307,9 +320,9 @@ export async function semanticDedupeStep(
 		raw = await askJson(deps, {
 			prompt: dedupePrompt([...byId.values()].map(dedupeBrief), batch.map((w) => [w.a.id, w.b.id] as const)),
 			system: DEDUPE_SYSTEM,
-			cwd: deps.create.workDir(job.id),
+			cwd: scope.cwd,
 			model: FAST_MODEL,
-			signal: opts.signal ?? new AbortController().signal,
+			signal: scope.signal ?? new AbortController().signal,
 		});
 	} catch (err) {
 		return { checkedNow: 0, remaining: pending.length, groups: groupsNow(), done: false, error: errorText(err).slice(0, 200) };
@@ -322,8 +335,18 @@ export async function semanticDedupeStep(
 	for (const cardId of byId.keys()) checked.add(cardId);
 	cache.checked = [...checked].sort();
 	cache.groups = [...cache.groups, ...found];
-	deps.create.writeDedupeCache(id, cache);
+	deps.create.writeDedupeCache(scope.cacheKey, cache);
 
 	const remaining = weak.filter(unchecked).length;
 	return { checkedNow: byId.size, remaining, groups: groupsNow(), done: remaining === 0, error: null };
+}
+
+/** The content check of one job's drafts (see `semanticStepOver`). */
+export async function semanticDedupeStep(
+	id: string,
+	opts: { threshold?: number; signal?: AbortSignal } = {},
+	deps: CardsDeps = defaultCardsDeps(),
+): Promise<SemanticStep> {
+	const job = requireCards(id, deps);
+	return semanticStepOver({ pages: allPages(job, deps), cacheKey: job.id, cwd: deps.create.workDir(job.id), ...opts }, deps);
 }

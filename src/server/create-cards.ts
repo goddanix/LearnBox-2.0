@@ -30,6 +30,7 @@ import {
 	glossaryPrompt,
 	glossarySystemPrompt,
 	kindHint,
+	retentionHint,
 	vocabSystemPrompt,
 } from "../agent/create/card-prompts.ts";
 import { type LayoutOptions, pdfLayouts } from "../agent/layout/pdf-raw.ts";
@@ -52,6 +53,7 @@ import {
 import { type CardDraft, type CardJobPageView, type CardPageResult, type CardsJobDetail, type GlossaryTerm, VOCAB_MAX_PER_PAGE } from "../core/contracts/create-cards.ts";
 import type { PageLayout } from "../core/contracts/page-layout.ts";
 import { clampPageRange, pageNumbers } from "../core/create.ts";
+import { courseRetention, LOW_RETENTION_THRESHOLD, RETENTION_WINDOW_DAYS } from "../core/retention.ts";
 import {
 	type AdoptResult,
 	type CreateDeps,
@@ -137,6 +139,8 @@ export function cardMediaFile(id: string, name: string, deps: CreateDeps = defau
 
 export interface CreateCardsJobInput {
 	lectureId: string;
+	/** The subject (study course) the PDF is for: its topics are the focus unless `settings` names a focus itself. */
+	courseId?: string;
 	settings?: unknown;
 	/** Start the run right away (default). */
 	autostart?: boolean;
@@ -148,7 +152,16 @@ export async function createCardsJob(input: CreateCardsJobInput, deps: CardsDeps
 	if (!lecture || !pdf) throw new CreateInputError("Unknown PDF — add it to the library first", 404);
 	const nPages = lecture.pages ?? (await pdfPageCount(pdf));
 
+	const courseId = typeof input.courseId === "string" ? input.courseId.trim() : "";
+	const course = courseId ? deps.study.readCourses().find((c) => c.id === courseId) : undefined;
+	if (courseId && !course) throw new CreateInputError("Unknown subject", 404);
+
 	const settings = cleanCardSettings(input.settings);
+	const namesFocus = typeof input.settings === "object" && input.settings !== null && "focusTopics" in input.settings;
+	if (course && !namesFocus) {
+		settings.focusTopics = [...(course.topics ?? [])];
+		settings.focusStrict = Boolean(course.strictTopics) && settings.focusTopics.length > 0;
+	}
 	if (settings.pageTo > 0 && settings.pageFrom > settings.pageTo) {
 		throw new CreateInputError("The page range is wrong: “from” is larger than “to”", 400);
 	}
@@ -165,6 +178,7 @@ export async function createCardsJob(input: CreateCardsJobInput, deps: CardsDeps
 		lectureId: lecture.id,
 		nPages,
 		settings,
+		...(course ? { courseId: course.id } : {}),
 		state: "queued",
 		createdAt: deps.now().toISOString(),
 		pages: Object.fromEntries(Array.from({ length: range.to - range.from + 1 }, (_, i) => [String(range.from + i), { status: "pending", count: 0, adopted: 0 }])),
@@ -181,6 +195,15 @@ interface RunContext {
 	session: PdfSession;
 	signal: AbortSignal;
 	deps: CardsDeps;
+}
+
+/** How well the job's subject was remembered lately, as a note for the page prompt ("" when it was fine, unknown or the PDF has no subject). */
+function retentionNote(job: CardsJob, deps: CreateDeps): string {
+	const course = job.courseId ? deps.study.readCourses().find((c) => c.id === job.courseId) : undefined;
+	if (!course) return "";
+	const cardIds = new Set(deps.study.readCards().filter((c) => c.courseId === course.id).map((c) => c.id));
+	const found = courseRetention(deps.study.readReviews(), cardIds, deps.now());
+	return found && found.retention < LOW_RETENTION_THRESHOLD ? retentionHint(course.name, found.retention, RETENTION_WINDOW_DAYS) : "";
 }
 
 const latinEnabled = (job: CardsJob): boolean =>
@@ -202,7 +225,7 @@ const setJob = (jobId: string, deps: CreateDeps, change: (job: CardsJob) => void
 	});
 };
 
-/** Latin on/off, the page titles and the glossary: once per job, before its first page. */
+/** Latin on/off, the retention note, the page titles and the glossary: once per job, before its first page. */
 async function prepareRun(jobId: string, ctx: RunContext): Promise<void> {
 	const { deps, signal } = ctx;
 	const job = deps.create.get(jobId);
@@ -211,6 +234,11 @@ async function prepareRun(jobId: string, ctx: RunContext): Promise<void> {
 
 	const latin = job.latin ?? latinEnabled(job);
 	if (job.latin === undefined) setJob(jobId, deps, (j) => (j.latin = latin));
+
+	if (job.retentionHint === undefined && !job.settings.vocab) {
+		const note = retentionNote(job, deps);
+		setJob(jobId, deps, (j) => (j.retentionHint = note));
+	}
 
 	if (!job.headings) {
 		const pages = pageNumbers(job);
@@ -259,6 +287,7 @@ function systemFor(job: CardsJob): string {
 	return (
 		cardSystemPrompt({ density: s.density, language: s.language, latin: job.latin ?? latinEnabled(job), atlas: s.wholeImageCards }) +
 		glossaryHint(job.glossary ?? []) +
+		(job.retentionHint ?? "") +
 		focusHint(s.focusTopics, s.focusStrict) +
 		kindHint(s.kind)
 	);
@@ -498,7 +527,7 @@ export function adoptCards(id: string, input: { courseId: string; cardIds?: stri
 				skipped++;
 				continue;
 			}
-			const made = draftToStudyCards(draft, { jobId: job.id, jobName: job.name, courseId: course.id, at });
+			const made = draftToStudyCards(draft, { jobId: job.id, jobName: job.name, courseId: course.id, courseTopics: course.topics, at });
 			if (made.length === 0) {
 				skipped++; // e.g. an occlusion whose pictures were never rendered
 				continue;

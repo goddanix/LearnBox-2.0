@@ -69,6 +69,8 @@ export interface AdoptContext {
 	jobId: string;
 	jobName: string;
 	courseId: string;
+	/** The topics of the course: a draft labelled with one of them is filed under it (else under the PDF's name). */
+	courseTopics?: readonly string[];
 	/** ISO time of the adoption. */
 	at: string;
 }
@@ -92,7 +94,7 @@ export function draftToStudyCards(c: CardDraft, ctx: AdoptContext): StudyCard[] 
 	const make = (k: number, kind: StudyCard["kind"], fields: Record<string, string>, variant?: number): StudyCard => ({
 		id: studyCardId(ctx.jobId, c.id, k),
 		courseId: ctx.courseId,
-		topic: ctx.jobName,
+		topic: c.tags.find((t) => ctx.courseTopics?.includes(t)) ?? ctx.jobName,
 		kind,
 		fields,
 		tags,

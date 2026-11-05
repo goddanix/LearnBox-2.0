@@ -775,3 +775,77 @@ describe("duplicates", () => {
 		assert.deepEqual(deps.create.readDedupeCache(id), { checked: [], groups: [] });
 	});
 });
+
+describe("a cards job for a subject", () => {
+	const topicsOf = (deps: CardsDeps, id: string) => {
+		const { focusTopics, focusStrict } = getCardsJob(id, deps).settings;
+		return [focusTopics, focusStrict];
+	};
+
+	it("takes the topics of the subject as its focus, unless the form names a focus of its own", async () => {
+		const { deps, study } = setup();
+		study.upsertCourse({ id: "cardio", name: "Cardiology", bufferDays: 5, createdAt: NOW.toISOString(), topics: ["Heart failure", "Valves"], strictTopics: true });
+		const job = await createCardsJob({ lectureId: "lec1", courseId: "cardio", autostart: false }, deps);
+		assert.equal(job.courseId, "cardio");
+		assert.deepEqual(topicsOf(deps, job.id), [["Heart failure", "Valves"], true]);
+
+		const own = await createCardsJob({ lectureId: "lec1", courseId: "cardio", settings: { focusTopics: "Rhythm" }, autostart: false }, deps);
+		assert.deepEqual(topicsOf(deps, own.id), [["Rhythm"], false]);
+		const none = await createCardsJob({ lectureId: "lec1", courseId: "cardio", settings: { focusTopics: "" }, autostart: false }, deps);
+		assert.deepEqual(topicsOf(deps, none.id), [[], false], "a form that sent an empty focus meant it");
+
+		const loose = await createCardsJob({ lectureId: "lec1", autostart: false }, deps);
+		assert.equal(loose.courseId, undefined);
+		await assert.rejects(createCardsJob({ lectureId: "lec1", courseId: "nope", autostart: false }, deps), (e) => e instanceof CreateInputError && e.status === 404);
+	});
+
+	/** Study cards of the course with `answers` reviews, `again` of them "Again". */
+	const remembered = (study: ReturnType<typeof setup>["study"], answers: number, again: number) => {
+		study.upsertCard({ id: "old1", courseId: "cardio", kind: "basic", fields: { Front: "q", Back: "a" }, tags: [], core: false, origin: { kind: "manual" }, createdAt: NOW.toISOString() });
+		const at = (i: number) => new Date(NOW.getTime() - 86_400_000 * 3 + i * 1000).toISOString();
+		study.appendReviews(Array.from({ length: answers }, (_, i) => ({ cardId: "old1", at: at(i), grade: i < again ? (1 as const) : (3 as const) })));
+	};
+	const pageSystem = (asked: AskClaudeRequest[]) => asked.find((r) => !isGlossary(r) && !isCritic(r))!.system;
+
+	it("tells the page prompts when the subject was remembered badly lately — once per job", async () => {
+		const { deps, study, asked } = setup({}, 1);
+		remembered(study, 60, 30);
+		const summary = await createCardsJob({ lectureId: "lec1", courseId: "cardio", autostart: false }, deps);
+		await startCardsJob(summary.id, {}, deps).settled;
+		assert.match(pageSystem(asked), /# Rückmeldung aus früherem Lernen\nIm Fach „Cardiology“ lag die Retention .* nur bei 50%/);
+		const job = deps.create.get(summary.id);
+		assert.match(job?.kind === "cards" ? (job.retentionHint ?? "") : "", /Cardiology/);
+
+		// fixed for the job: better reviews later do not change a rerun
+		remembered(study, 400, 0);
+		asked.length = 0;
+		await startCardsJob(summary.id, { pages: [1] }, deps).settled;
+		assert.match(pageSystem(asked), /nur bei 50%/);
+	});
+
+	it("says nothing when the subject was fine, unknown, or the PDF has no subject", async () => {
+		for (const [answers, again, courseId] of [[60, 6, "cardio"], [10, 9, "cardio"], [0, 0, "cardio"], [60, 30, undefined]] as const) {
+			const { deps, study, asked } = setup({}, 1);
+			if (answers > 0) remembered(study, answers, again);
+			const summary = await createCardsJob({ lectureId: "lec1", ...(courseId ? { courseId } : {}), autostart: false }, deps);
+			await startCardsJob(summary.id, {}, deps).settled;
+			assert.doesNotMatch(pageSystem(asked), /Rückmeldung aus früherem Lernen/, `${answers} answers, ${again} again, ${courseId}`);
+			const job = deps.create.get(summary.id);
+			assert.equal(job?.kind === "cards" ? job.retentionHint : "x", "");
+		}
+	});
+
+	it("files an adopted draft under the topic it was given, else under the PDF's name", async () => {
+		const { deps, study, create } = setup({}, 1);
+		study.upsertCourse({ id: "cardio", name: "Cardiology", bufferDays: 5, createdAt: NOW.toISOString(), topics: ["Valves"] });
+		const id = await runJob(deps);
+		const page = create.readCardPage(id, 1)!;
+		page.cards[0]!.tags = ["Valves"];
+		page.cards[1]!.tags = ["Something else"];
+		create.writeCardPage(id, page);
+		adoptCards(id, { courseId: "cardio" }, deps);
+		const made = study.readCards().filter((c) => c.courseId === "cardio");
+		assert.deepEqual(made.map((c) => c.topic), ["Valves", "Cardiology"]);
+		assert.ok(made[0]!.tags.includes("Valves"));
+	});
+});
