@@ -32,7 +32,11 @@ async function fixture(options: { login?: (id: string, interaction: ProviderAuth
 	};
 	return { controller, directory, sdk, opened, updates, scope, get refreshes() { return refreshes; }, async cleanup() { controller.close(); await fs.rm(directory, { recursive: true, force: true }); } };
 }
-test("main loader resolves Pi's import-only PUBLIC package exports and native OAuth without a CLI or network", async () => {
+// The loader runs in the desktop app's Electron (Node 24). From Node 24 on, `require.resolve` honours the hook's added
+// "import" condition; Node 22 (the dev machine's) does not and fails with ERR_PACKAGE_PATH_NOT_EXPORTED, although the
+// loader is fine in the app (checked 2026-11-06 under the installed app's Electron-as-Node).
+const NODE_MAJOR = Number(process.versions.node.split(".")[0]);
+test("main loader resolves Pi's import-only PUBLIC package exports and native OAuth without a CLI or network", { skip: NODE_MAJOR < 24 && `needs Node 24 or newer (the app's Electron runtime); this is Node ${process.versions.node}` }, async () => {
 	const sdk = await loadSubscriptionSDK(path.resolve(import.meta.dirname, ".."));
 	assert.equal(typeof sdk.createModels, "function");
 	for (const [id, factory] of [["github-copilot", sdk.githubCopilotProvider], ["xai", sdk.xaiProvider]] as const) {
