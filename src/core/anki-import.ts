@@ -293,29 +293,59 @@ export interface SuggestedPlan extends ImportPlan {
 	hints: string[];
 }
 
-/** A starting point for the owner: top-level deck = course, the rest = topic;
- *  a course takes the (earliest) Deadline Scheduler deadline of its decks. */
-export function suggestPlan(col: AnkiCollection, now: Date): SuggestedPlan {
+/** Where a deck goes: a course (the subject) and, optionally, a topic inside it. */
+export interface DeckPlacement {
+	course: string;
+	topic?: string;
+}
+
+export interface PlanOptions {
+	/**
+	 * Which deck level is the subject, i.e. the course: 0 = the top deck (the default), 1 = its first sub-deck, …
+	 * What lies below that level is the topic: with 1, "1st Year::Biology::W1 Cell" becomes course "Biology", topic
+	 * "W1 Cell". A deck that does not reach the level is its own course, without a topic.
+	 */
+	subjectLevel?: number;
+	/** The owner's exception to the rule, per deck: another placement, or null to leave the deck out. */
+	retarget?: (levels: readonly string[], placed: DeckPlacement) => DeckPlacement | null;
+}
+
+/** The rule for one deck (`levels` = its path, "1st Year::Biology::W1" → ["1st Year", "Biology", "W1"]). */
+export function placeDeck(levels: readonly string[], subjectLevel = 0): DeckPlacement {
+	const at = Math.min(Math.max(subjectLevel, 0), Math.max(levels.length - 1, 0));
+	const topic = levels.slice(at + 1).join("::");
+	return topic.length > 0 ? { course: levels[at] ?? "", topic } : { course: levels[at] ?? "" };
+}
+
+/** A starting point for the owner: by default the top-level deck = course, the rest = topic (see `PlanOptions` for
+ *  another level); a course takes the (earliest) Deadline Scheduler deadline of its decks. */
+export function suggestPlan(col: AnkiCollection, now: Date, options: PlanOptions = {}): SuggestedPlan {
+	const place = (levels: readonly string[]): DeckPlacement | null => {
+		const placed = placeDeck(levels, options.subjectLevel ?? 0);
+		return options.retarget ? options.retarget(levels, placed) : placed;
+	};
 	const courses = new Map<string, StudyCourse>();
 	const decks: ImportPlan["decks"] = {};
 	for (const d of inspectCollection(col).decks) {
 		const original = col.decks.find((x) => x.id === d.id);
-		const levels = deckPath(original?.name ?? d.name);
-		const top = levels[0] ?? d.name;
-		const courseId = courseSlug(top);
-		if (!courses.has(courseId)) {
-			courses.set(courseId, { id: courseId, name: top, bufferDays: 5, createdAt: now.toISOString() });
+		const placed = place(deckPath(original?.name ?? d.name));
+		if (placed === null) {
+			decks[String(d.id)] = null;
+			continue;
 		}
-		const topic = levels.slice(1).join("::");
-		decks[String(d.id)] = topic.length > 0 ? { courseId, topic } : { courseId };
+		const courseId = courseSlug(placed.course);
+		if (!courses.has(courseId)) {
+			courses.set(courseId, { id: courseId, name: placed.course, bufferDays: 5, createdAt: now.toISOString() });
+		}
+		decks[String(d.id)] = placed.topic ? { courseId, topic: placed.topic } : { courseId };
 	}
 
 	const hints: string[] = [];
 	const found = new Map<string, AnkiSchedulerDeadline[]>();
 	for (const [deckId, rec] of Object.entries(col.deadlines ?? {})) {
 		const deck = col.decks.find((x) => String(x.id) === deckId);
-		const top = deck ? deckPath(deck.name)[0] : undefined;
-		const courseId = top === undefined ? undefined : courseSlug(top);
+		const placed = deck ? place(deckPath(deck.name)) : null;
+		const courseId = placed === null ? undefined : courseSlug(placed.course);
 		if (courseId === undefined || !courses.has(courseId)) continue;
 		found.set(courseId, [...(found.get(courseId) ?? []), rec]);
 	}
@@ -324,13 +354,15 @@ export function suggestPlan(col: AnkiCollection, now: Date): SuggestedPlan {
 		const earliest = [...recs].sort((a, b) => a.deadline.localeCompare(b.deadline))[0]!;
 		course.deadline = earliest.deadline;
 		course.bufferDays = earliest.bufferDays;
-		if (earliest.newPerDay !== undefined) course.newPerDay = earliest.newPerDay;
+		// One per-day number belongs to ONE deck: with several decks in a course it is no number for the whole course,
+		// so the pace stays automatic (what is left over the days to the deadline).
+		const manyPerDay = recs.length > 1 && recs.some((r) => r.newPerDay !== undefined);
+		if (earliest.newPerDay !== undefined && recs.length === 1) course.newPerDay = earliest.newPerDay;
 		const distinct = [...new Set(recs.map((r) => r.deadline))].sort();
-		if (distinct.length > 1) {
-			hints.push(
-				`${course.name}: ${distinct.length} decks have different Scheduler deadlines (${distinct.join(", ")}); using the earliest.`,
-			);
-		}
+		const notes: string[] = [];
+		if (distinct.length > 1) notes.push(`${distinct.length} decks have different Scheduler deadlines (${distinct.join(", ")}); using the earliest`);
+		if (manyPerDay) notes.push("new cards per day left automatic (the Scheduler's per-deck numbers do not add up to a course)");
+		if (notes.length > 0) hints.push(`${course.name}: ${notes.join("; ")}.`);
 	}
 	return { courses: [...courses.values()], decks, hints };
 }

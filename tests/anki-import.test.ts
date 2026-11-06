@@ -28,6 +28,7 @@ import {
 	mediaRefs,
 	parseImportPlan,
 	parseSchedulerDeadlines,
+	placeDeck,
 	suggestPlan,
 	type AnkiCollection,
 	type AnkiNoteTypeRow,
@@ -436,5 +437,88 @@ describe("Deadline Scheduler deadlines and the import plan from the UI", () => {
 		assert.throws(() => runAnkiImport(FIXTURE, { courses: [], decks: { "1": { courseId: "ghost" } } }, { store, mediaDest }), status(400));
 		assert.equal(store.readCards().length, 0);
 		assert.equal(store.readCourses().length, 0);
+	});
+});
+
+describe("the subject level of the plan (first sub-deck = course, the levels below = topic)", () => {
+	const NOW = new Date("2026-11-06T00:00:00Z");
+	const S = "\u001f";
+	const deadline = (d: string, over: Record<string, unknown> = {}) => ({ deadline: d, bufferDays: 3, ...over });
+	// 1st Year > Anatomy > Bones | 1st Year > Biology > W1, W2 | 1st Year > Biophysics (own cards) + > Practice
+	// | Anatomy > Muscles > 1 Upper limb | Tests > Junk
+	const names = [
+		`1st Year${S}Anatomy${S}Bones`,
+		`1st Year${S}Biology${S}W1 Cell`,
+		`1st Year${S}Biology${S}W2 DNA`,
+		`1st Year${S}Biophysics`,
+		`1st Year${S}Biophysics${S}Practice`,
+		`Anatomy${S}Muscles${S}1 Upper limb`,
+		`Tests${S}Junk`,
+		`1st Year${S}Anatomy`, // a parent deck: no cards, only a Scheduler record
+		`1st Year${S}Biology`,
+	];
+	const col = (deadlines: AnkiCollection["deadlines"]): AnkiCollection => ({
+		decks: names.map((name, i) => ({ id: i + 1, name })),
+		noteTypes: [noteType({ id: 1, name: "Basic", fields: ["Front", "Back"] })],
+		notes: [{ id: 100, mid: 1, tags: "", flds: `q${S}a` }],
+		cards: names.slice(0, 7).map((_, i) => ({ id: i + 1, nid: 100, did: i + 1, ord: i, queue: 0, odid: 0 })),
+		revlog: [],
+		deadlines,
+	});
+
+	it("placeDeck: level 0 is the old rule; level 1 takes the first sub-deck as the course", () => {
+		assert.deepEqual(placeDeck(["1st Year", "Biology", "W1 Cell"]), { course: "1st Year", topic: "Biology::W1 Cell" });
+		assert.deepEqual(placeDeck(["1st Year", "Biology", "W1 Cell"], 1), { course: "Biology", topic: "W1 Cell" });
+		assert.deepEqual(placeDeck(["1st Year", "Biophysics"], 1), { course: "Biophysics" });
+		assert.deepEqual(placeDeck(["Tests"], 1), { course: "Tests" }, "a deck that does not reach the level is its own course");
+		assert.deepEqual(placeDeck(["A", "B", "C", "D"], 1), { course: "B", topic: "C::D" }, "deeper levels stay in the topic");
+	});
+
+	it("subjectLevel 1: Anatomy, Biology and Biophysics become courses; the decks below are the topics", () => {
+		const plan = suggestPlan(col({}), NOW, { subjectLevel: 1 });
+		const targetOf = (name: string) => plan.decks[String(names.indexOf(name) + 1)];
+		assert.deepEqual(targetOf(`1st Year${S}Anatomy${S}Bones`), { courseId: "anatomy", topic: "Bones" });
+		assert.deepEqual(targetOf(`1st Year${S}Biology${S}W2 DNA`), { courseId: "biology", topic: "W2 DNA" });
+		assert.deepEqual(targetOf(`1st Year${S}Biophysics`), { courseId: "biophysics" });
+		assert.deepEqual(targetOf(`1st Year${S}Biophysics${S}Practice`), { courseId: "biophysics", topic: "Practice" });
+		assert.deepEqual(targetOf(`Anatomy${S}Muscles${S}1 Upper limb`), { courseId: "muscles", topic: "1 Upper limb" }, "strict rule, before any exception");
+		assert.ok(!plan.courses.some((c) => c.id === "1st-year"), "the year is no course");
+	});
+
+	it("retarget: an exception can merge a tree into another course or leave it out, and the plan follows", () => {
+		const retarget = (levels: readonly string[], placed: { course: string; topic?: string }) => {
+			if (levels[0] === "Tests") return null;
+			if (levels[0] === "Anatomy") return { course: "Anatomy", topic: levels.slice(2).join("::") };
+			return placed;
+		};
+		const plan = suggestPlan(col({}), NOW, { subjectLevel: 1, retarget });
+		const targetOf = (name: string) => plan.decks[String(names.indexOf(name) + 1)];
+		assert.equal(targetOf(`Tests${S}Junk`), null);
+		assert.deepEqual(targetOf(`Anatomy${S}Muscles${S}1 Upper limb`), { courseId: "anatomy", topic: "1 Upper limb" });
+		assert.deepEqual(plan.courses.map((c) => c.id).sort(), ["anatomy", "biology", "biophysics"]);
+	});
+
+	it("deadlines follow the course: a parent deck's record counts, the earliest wins, a skipped deck's record is ignored", () => {
+		const id = (name: string) => String(names.indexOf(name) + 1);
+		const plan = suggestPlan(
+			col({
+				[id(`1st Year${S}Anatomy`)]: deadline("2026-11-13"),
+				[id(`1st Year${S}Biology${S}W1 Cell`)]: deadline("2026-12-19", { newPerDay: 13 }),
+				[id(`1st Year${S}Biology${S}W2 DNA`)]: deadline("2026-12-20", { newPerDay: 13 }),
+				[id(`1st Year${S}Biophysics`)]: deadline("2027-01-04", { bufferDays: 5, newPerDay: 7 }),
+				[id(`Tests${S}Junk`)]: deadline("2026-11-20"),
+			}),
+			NOW,
+			{ subjectLevel: 1, retarget: (levels, placed) => (levels[0] === "Tests" ? null : placed) },
+		);
+		const course = (cid: string) => plan.courses.find((c) => c.id === cid)!;
+		assert.equal(course("anatomy").deadline, "2026-11-13");
+		assert.equal(course("biophysics").deadline, "2027-01-04");
+		assert.equal(course("biophysics").newPerDay, 7, "one deck, one number: kept");
+		assert.equal(course("biology").deadline, "2026-12-19", "the earliest of its topics");
+		assert.equal(course("biology").newPerDay, undefined, "two decks' per-day numbers are no course number: automatic");
+		assert.equal(plan.hints.length, 1);
+		assert.match(plan.hints[0] ?? "", /Biology.*2026-12-19, 2026-12-20.*earliest.*automatic/);
+		assert.equal(plan.courses.some((c) => c.deadline === "2026-11-20"), false, "the skipped deck's deadline is not used");
 	});
 });
