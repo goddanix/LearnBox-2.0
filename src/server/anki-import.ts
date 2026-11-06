@@ -27,6 +27,13 @@ import { copyAnkiMedia, findAnkiCollections, readAnkiCollection } from "../store
 import { StudyInputError } from "./study.ts";
 import { studyStore } from "../store/study.ts";
 
+/**
+ * Which deck level the suggested plan takes as the course: 1 = the first sub-deck, so `1st Year::Biology::W1` is course
+ * "Biology", topic "W1" (the owner's layout: a year or semester as the top deck, the subjects below it). A deck that
+ * has no sub-deck is its own course. The owner can still remap every deck in the dialog.
+ */
+export const SUGGESTED_SUBJECT_LEVEL = 1;
+
 /** Anki collections found under Anki's data folder, one per profile. */
 export function listAnkiCollections(base?: string): AnkiCandidate[] {
 	return findAnkiCollections(base);
@@ -65,7 +72,7 @@ export function inspectAnki(
 	}
 	return {
 		inspection: inspectCollection(col),
-		suggestedPlan: suggestPlan(col, now),
+		suggestedPlan: suggestPlan(col, now, { subjectLevel: SUGGESTED_SUBJECT_LEVEL }),
 		existingCourses: store.readCourses().map((c) => ({ id: c.id, name: c.name })),
 	};
 }

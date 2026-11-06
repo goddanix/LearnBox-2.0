@@ -196,7 +196,7 @@ describe("anki-import against a real Anki collection", () => {
 		assert.throws(() => readAnkiCollection(junk));
 	});
 
-	it("inspects decks and note types and suggests top-level deck = course", () => {
+	it("inspects decks and note types and suggests the first sub-deck = course, the levels below = topic", () => {
 		const { inspection, suggestedPlan } = inspectAnki(FIXTURE, new Date("2026-11-04T00:00:00Z"));
 		assert.deepEqual(inspection.decks.map((d) => `${d.name}:${d.cards}`), [
 			"Anatomie:2",
@@ -206,9 +206,14 @@ describe("anki-import against a real Anki collection", () => {
 		]);
 		assert.equal(inspection.cards, 7);
 		assert.equal(inspection.reviews, 7);
-		assert.deepEqual(suggestedPlan.courses.map((c) => c.id).sort(), ["anatomie", "physiologie", "tschechisch"]);
-		const nerven = Object.values(suggestedPlan.decks).find((d) => d?.topic === "Arm::Nerven");
-		assert.equal(nerven?.courseId, "anatomie");
+		assert.deepEqual(suggestedPlan.courses.map((c) => c.id).sort(), ["anatomie", "arm", "physiologie", "tschechisch"]);
+		const nerven = Object.values(suggestedPlan.decks).find((d) => d?.topic === "Nerven");
+		assert.equal(nerven?.courseId, "arm", "Anatomie::Arm is the subject, Nerven its topic");
+		assert.deepEqual(
+			Object.values(suggestedPlan.decks).filter((d) => d?.courseId === "anatomie"),
+			[{ courseId: "anatomie" }],
+			"a deck without a sub-deck is its own course, with no topic",
+		);
 		assert.ok(inspection.noteTypes.find((t) => t.name === "Fremd Vokabel")?.remapped);
 	});
 
@@ -219,15 +224,15 @@ describe("anki-import against a real Anki collection", () => {
 
 		assert.equal(out.added.cards, 7);
 		assert.equal(out.added.reviews, 7);
-		assert.equal(out.added.courses, 3);
+		assert.equal(out.added.courses, 4);
 		assert.deepEqual(out.report.remapped, { "Fremd Vokabel": 1, Cloze: 1 });
 		assert.equal(out.report.skippedReviews.cramOrManual, 1);
 
 		const cards = store.readCards();
 		const radialis = cards.find((c) => c.id === "anki_1793808385423");
 		assert.equal(radialis?.kind, "basic");
-		assert.equal(radialis?.courseId, "anatomie");
-		assert.equal(radialis?.topic, "Arm::Nerven");
+		assert.equal(radialis?.courseId, "arm");
+		assert.equal(radialis?.topic, "Nerven");
 		assert.equal(radialis?.core, true);
 		assert.equal(radialis?.fields.Front, "Nervus radialis: Innervation?");
 		assert.deepEqual(radialis?.origin, { kind: "anki-import", noteId: 1793808385423 });
