@@ -175,6 +175,8 @@ function source(courses: StudyCourseSummary[]): PhoneSource {
 		engine: { api, meta: META, unsent: () => 0, unsentReviews: () => [], unsentOps: () => [] },
 		update: async () => { throw new Error("no update expected"); },
 		restore: async () => { throw new Error("no restore expected"); },
+		saveCards: async () => null,
+		loadCards: async () => { throw new Error("no cards file expected"); },
 	};
 }
 const open = (courses = [course("a", "Anatomy", 612), course("b", "Biology", 603)]) => async () => source(courses);
@@ -236,7 +238,7 @@ describe("the storage line and the promise to keep it", () => {
 		assert.equal(storageLine(courses, null), "On this phone: 3 cards in 2 courses.");
 		assert.equal(storageLine(courses, { persistent: null }), "On this phone: 3 cards in 2 courses.");
 		assert.equal(storageLine(courses, { persistent: true, usage: 38_000_000 }), "On this phone: 3 cards in 2 courses (38 MB). Storage is kept safe.");
-		assert.equal(storageLine(courses, { persistent: false }), "On this phone: 3 cards in 2 courses. iOS may clear this storage.");
+		assert.equal(storageLine(courses, { persistent: false }), "On this phone: 3 cards in 2 courses. iOS may clear this storage — save a cards file to keep a copy.");
 		assert.equal(storageLine([courses[0]!], { persistent: true }), "On this phone: 1 card in 1 course. Storage is kept safe.");
 	});
 

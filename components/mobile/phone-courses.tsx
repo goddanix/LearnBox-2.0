@@ -50,8 +50,27 @@ export function storageLine(courses: StudyCourseSummary[] | null, storage: Phone
 	const size = storage?.usage !== undefined ? ` (${formatBytes(storage.usage)})` : "";
 	if (!storage) return `${held}.`;
 	if (storage.persistent === true) return `${held}${size}. Storage is kept safe.`;
-	if (storage.persistent === false) return `${held}${size}. iOS may clear this storage.`;
+	if (storage.persistent === false) return `${held}${size}. iOS may clear this storage — save a cards file to keep a copy.`;
 	return `${held}${size}.`;
+}
+
+/** A button that picks a cards file (any file: the phone's file picker does not know our extension). */
+function CardsFileButton({ onPick, label }: { onPick: (file: File) => void; label: string }) {
+	return (
+		<label className="flex h-11 cursor-pointer items-center rounded-lg border px-4 active:bg-accent" data-testid="phone-cards-load">
+			{label}
+			<input
+				type="file"
+				className="sr-only"
+				data-testid="phone-cards-load-input"
+				onChange={(e) => {
+					const file = e.target.files?.[0];
+					e.target.value = "";
+					if (file) onPick(file);
+				}}
+			/>
+		</label>
+	);
 }
 
 /** The phone's start page: which course? */
@@ -76,6 +95,10 @@ export function PhoneCourses({
 	onOpenLesson,
 	onUpdate,
 	onLibrary,
+	cardsFile = null,
+	onSaveCards,
+	onShareCards,
+	onLoadCards,
 	onBackup,
 	onRestore,
 }: {
@@ -110,6 +133,14 @@ export function PhoneCourses({
 	onUpdate: () => void;
 	/** Open the list of the Mac's courses: which ones this phone holds. */
 	onLibrary?: () => void;
+	/** The cards file being made (preparing) or ready to hand over (its size in bytes); null: none. */
+	cardsFile?: "preparing" | { bytes: number } | null;
+	/** Start making the cards file. */
+	onSaveCards?: () => void;
+	/** Hand the finished file over. Runs inside the tap: the share sheet only opens for one. */
+	onShareCards?: () => void;
+	/** Read a cards file in. */
+	onLoadCards?: (file: File) => void;
 	/** Hand the answers only this phone has to the share sheet. */
 	onBackup: () => void;
 	/** Read a backup file's answers in. */
@@ -196,6 +227,18 @@ export function PhoneCourses({
 						Save backup file
 					</button>
 				)}
+				{onSaveCards && (
+					<button
+						type="button"
+						onClick={cardsFile !== null && cardsFile !== "preparing" ? onShareCards : onSaveCards}
+						disabled={cardsFile === "preparing"}
+						className="flex h-11 items-center rounded-lg border px-4 active:bg-accent disabled:opacity-50"
+						data-testid={cardsFile !== null && cardsFile !== "preparing" ? "phone-cards-share" : "phone-cards-save"}
+					>
+						{cardsFile === "preparing" ? "Preparing the file…" : cardsFile ? `Share cards file (${formatBytes(cardsFile.bytes)})` : "Save cards file"}
+					</button>
+				)}
+				{onLoadCards && <CardsFileButton onPick={onLoadCards} label="Load cards file" />}
 				<label className="flex h-11 cursor-pointer items-center rounded-lg border px-4 active:bg-accent" data-testid="phone-restore">
 					Read backup file
 					<input
@@ -223,14 +266,20 @@ export function PhoneSetup({
 	updating,
 	error,
 	catalog = null,
+	notice = null,
 	onStart,
+	onLoadCards,
 }: {
 	updating: PullProgress | null;
 	error: string | null;
 	/** The Mac's courses, once the phone has asked (null: not known). */
 	catalog?: readonly PhoneCatalogEntry[] | null;
+	/** What reading a cards file did, in a sentence. */
+	notice?: string | null;
 	/** `courseIds`: the ones ticked; absent when the phone has no list to choose from. */
 	onStart: (courseIds?: string[]) => void;
+	/** Read a cards file in: the cards without the Mac. */
+	onLoadCards?: (file: File) => void;
 }) {
 	// null: the learner has not touched a box yet, so every course is ticked
 	const [touched, setTouched] = useState<ReadonlySet<string> | null>(null);
@@ -270,6 +319,17 @@ export function PhoneSetup({
 				<DownloadIcon className="size-5" />
 				{updating ? progressText(updating) : "Get my cards"}
 			</button>
+			{notice && (
+				<p className="text-sm text-muted-foreground" data-testid="phone-notice">
+					{notice}
+				</p>
+			)}
+			{onLoadCards && (
+				<div className="flex flex-col gap-2 text-sm text-muted-foreground">
+					<p>No Mac at hand? Load a cards file you saved earlier.</p>
+					<CardsFileButton onPick={onLoadCards} label="Load cards file" />
+				</div>
+			)}
 		</main>
 	);
 }

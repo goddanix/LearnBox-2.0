@@ -97,6 +97,8 @@ const sourceOf = (a: PhoneStudyApi): PhoneSource => ({
 	engine: { api: a, meta: META, unsent: () => 0, unsentReviews: () => [], unsentOps: () => [] },
 	update: async () => { throw new Error("no update expected"); },
 	restore: async () => { throw new Error("no restore expected"); },
+		saveCards: async () => null,
+		loadCards: async () => { throw new Error("no cards file expected"); },
 });
 async function mount(a: PhoneStudyApi) {
 	const router = { push: () => {}, replace: () => {}, back: () => {}, forward: () => {}, refresh: () => {}, prefetch: () => {} };

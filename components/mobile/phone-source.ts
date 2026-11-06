@@ -5,6 +5,9 @@
  */
 
 import type { PhoneCardOp, StudyReview } from "@/src/core";
+import type { CardsFileSource } from "@/src/core";
+import { buildCardsFile, importCardsFile } from "./phone-cards-file";
+import type { ImportCardsResult, PreparedCardsFile } from "./phone-cards-file";
 import { openIndexedPhoneDb } from "./phone-db";
 import type { PhoneDb } from "./phone-db";
 import { startPhoneEngine } from "./phone-engine";
@@ -34,6 +37,10 @@ export interface PhoneSource {
 	/** `courseIds`: the courses to hold on the phone from now on (without them: the ones it holds, or all on the first run). */
 	update(onProgress: (p: PullProgress) => void, courseIds?: readonly string[]): Promise<{ result: UpdateResult; source: PhoneSource }>;
 	restore(backup: { reviews: readonly StudyReview[]; ops?: readonly PhoneCardOp[] }): Promise<RestoreResult & { source: PhoneSource }>;
+	/** Everything the phone holds as one file to keep (null: nothing yet). */
+	saveCards(device?: string): Promise<PreparedCardsFile | null>;
+	/** A cards file picked on this phone, read in (no Mac needed). */
+	loadCards(file: CardsFileSource): Promise<{ result: ImportCardsResult; source: PhoneSource }>;
 }
 
 export function sourceOver(db: PhoneDb, engine: PhoneEngine | null): PhoneSource {
@@ -53,6 +60,11 @@ export function sourceOver(db: PhoneDb, engine: PhoneEngine | null): PhoneSource
 			const added = await db.importReviews(backup.reviews);
 			const addedOps = await db.importOps(backup.ops ?? []);
 			return { added, addedOps, source: sourceOver(db, await startPhoneEngine(db)) };
+		},
+		saveCards: (device) => buildCardsFile(db, new Date(), device),
+		async loadCards(file) {
+			const result = await importCardsFile(db, file);
+			return { result, source: sourceOver(db, await startPhoneEngine(db)) };
 		},
 	};
 }

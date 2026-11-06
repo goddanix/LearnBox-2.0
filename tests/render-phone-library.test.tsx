@@ -81,6 +81,8 @@ function sourceHolding(courses: StudyCourseSummary[] | null, over: { meta?: Part
 			return { result: RESULT, source: sourceHolding(courses ?? [summary("a", "Anatomy", 800)], { meta: { courses: courseIds ? [...courseIds] : ["a"] } }) };
 		},
 		restore: async () => { throw new Error("no restore expected"); },
+		saveCards: async () => null,
+		loadCards: async () => { throw new Error("no cards file expected"); },
 	};
 }
 /** The Mac: its phone catalog answer (or an error), and the phone's own `me`. */

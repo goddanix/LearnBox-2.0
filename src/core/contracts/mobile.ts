@@ -133,6 +133,48 @@ export interface PhoneDeck {
 	catalog?: PhoneCatalogEntry[];
 }
 
+// ─── the cards file (Slice 10g) ──────────────────────────────────────────────
+
+export const PHONE_CARDS_SCHEMA = 1;
+export const PHONE_CARDS_KIND = "learnbox-phone-cards";
+
+/** One picture or sound in a cards file: its bytes follow the header, in the order listed. */
+export interface PhoneCardsMedia {
+	name: string;
+	mime: string;
+	size: number;
+}
+
+/**
+ * The first part of a cards file: what the phone holds, for keeping a copy outside the browser's storage (or moving it
+ * to another phone). The file is: 8 bytes of magic, the header's length (4 bytes, big endian), the header as JSON, then
+ * the media files' bytes back to back — no base64, so a picture costs what it weighs.
+ */
+export interface PhoneCardsHeader {
+	v: typeof PHONE_CARDS_SCHEMA;
+	kind: typeof PHONE_CARDS_KIND;
+	createdAt: string;
+	/** The phone's name, for the learner's own eyes. */
+	device?: string;
+	/** The Mac's clock when the deck on the phone was cut. */
+	deckAt: string;
+	/** How many lines of the Mac's review ledger the deck had taken in. */
+	macReviews: number;
+	/** The courses held on the phone. */
+	held: string[];
+	/** The Mac's course list at the last update. */
+	catalog?: PhoneCatalogEntry[];
+	courses: StudyCourse[];
+	cards: StudyCard[];
+	/** Review lines the Mac has (the ones it gave, and the phone's own it has taken in). */
+	reviews: StudyReview[];
+	/** Answers only the phone has. */
+	unsent: StudyReview[];
+	/** Card changes the Mac does not have yet. */
+	ops: PhoneCardOp[];
+	media: PhoneCardsMedia[];
+}
+
 // ─── answers going back to the Mac (Slice 10d) ───────────────────────────────
 
 export const PHONE_BACKUP_SCHEMA = 1;

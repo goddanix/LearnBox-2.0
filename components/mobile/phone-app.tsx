@@ -7,7 +7,9 @@ import { buildPhoneBackup, cardChangesText } from "@/src/core";
 import { keepAppForOffline } from "./offline-shell";
 import { getPhoneToken, phoneFetch, restorePhoneToken } from "./phone-auth";
 import { dismissInstallHint, installHintDismissed, isStandalone } from "./phone-install-hint";
-import { readBackupFile, saveBackupFile } from "./phone-backup";
+import { handOverFile, readBackupFile, saveBackupFile } from "./phone-backup";
+import { cardsLoadedText } from "./phone-cards-file";
+import type { PreparedCardsFile } from "./phone-cards-file";
 import { PhoneCourses, PhoneSetup } from "./phone-courses";
 import { fetchPhoneCatalog } from "./phone-catalog";
 import { PhoneApiError } from "./phone-http";
@@ -86,6 +88,8 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 	const [updating, setUpdating] = useState<PullProgress | null>(null);
 	const [updated, setUpdated] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
+	/** The cards file being made, or made and waiting for the tap that hands it over. */
+	const [cardsFile, setCardsFile] = useState<"preparing" | PreparedCardsFile | null>(null);
 	/** The Mac's list of courses, asked while the library or the first-run choice is up (null: not asked, or not answered). */
 	const [catalog, setCatalog] = useState<PhoneCatalogEntry[] | null>(null);
 	const [catalogFailed, setCatalogFailed] = useState(false);
@@ -116,6 +120,8 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 	const loadCourses = useCallback(async () => {
 		const engine = sourceRef.current?.engine;
 		if (!engine) return;
+		// whatever was studied or changed since, a cards file made before is out of date
+		setCardsFile(null);
 		try {
 			const list = await engine.api.courses();
 			setCourses(list);
@@ -299,6 +305,53 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 		);
 	};
 
+	/** Gather everything the phone holds into a file. The share sheet only opens for a tap, so handing it over is the next tap. */
+	const prepareCards = async () => {
+		const current = sourceRef.current;
+		if (!current || cardsFile === "preparing") return;
+		setNotice(null);
+		setCardsFile("preparing");
+		try {
+			const prepared = await current.saveCards(deviceName ?? undefined);
+			if (!prepared) setNotice("There is nothing on this phone to save yet.");
+			setCardsFile(prepared);
+		} catch (e) {
+			setCardsFile(null);
+			setNotice(`Could not make the cards file: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	};
+
+	/** Hand the finished cards file to the share sheet. Runs inside the tap: nothing is awaited before the share. */
+	const shareCards = () => {
+		if (cardsFile === null || cardsFile === "preparing") return;
+		setNotice(null);
+		void handOverFile(cardsFile.file).then(
+			(how) => {
+				if (how === "cancelled") return;
+				setNotice(how === "shared" ? "Cards file handed over." : "Cards file downloaded.");
+				setCardsFile(null);
+			},
+			(e: unknown) => setNotice(`Could not save the cards file: ${e instanceof Error ? e.message : String(e)}`),
+		);
+	};
+
+	/** A cards file picked on this phone: its answers and changes join the ones waiting, its cards come when the phone has none or older ones. */
+	const loadCards = async (file: File) => {
+		const current = sourceRef.current;
+		if (!current) return;
+		setNotice(null);
+		try {
+			const { result, source: next } = await current.loadCards(file);
+			sourceRef.current = next;
+			setSource(next);
+			setCardsFile(null);
+			setNotice(cardsLoadedText(result));
+			await loadCourses();
+		} catch (e) {
+			setNotice(`Could not read the cards file: ${e instanceof Error ? e.message : String(e)}`);
+		}
+	};
+
 	/** A backup file picked on this phone: its answers join the ones waiting to be sent. */
 	const restoreBackup = async (file: File) => {
 		const current = sourceRef.current;
@@ -331,7 +384,7 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 	if (fatal) return <p className="px-4 py-10 text-sm text-red-400" role="alert" data-testid="phone-error">{fatal}</p>;
 	if (!source) return <p className="px-4 py-10 text-sm text-muted-foreground">Loading…</p>;
 	const engine = source.engine;
-	if (!engine) return <PhoneSetup updating={updating} error={error} catalog={catalog} onStart={(ids) => void update(ids)} />;
+	if (!engine) return <PhoneSetup updating={updating} error={error} catalog={catalog} notice={notice} onStart={(ids) => void update(ids)} onLoadCards={(file) => void loadCards(file)} />;
 
 	const routeCourseId = route.kind === "course" || route.kind === "learn" ? route.courseId : null;
 	if (routeCourseId && !courses && !error) return <p className="px-4 py-10 text-sm text-muted-foreground">Loading…</p>;
@@ -433,6 +486,10 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 			onOpenLesson={(chatId) => navigate({ kind: "lesson", chatId })}
 			onUpdate={() => void update()}
 			onLibrary={() => navigate({ kind: "library" })}
+			cardsFile={cardsFile === null || cardsFile === "preparing" ? cardsFile : { bytes: cardsFile.bytes }}
+			onSaveCards={() => void prepareCards()}
+			onShareCards={shareCards}
+			onLoadCards={(file) => void loadCards(file)}
 		/>
 	);
 }

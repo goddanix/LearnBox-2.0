@@ -11,13 +11,11 @@ export type BackupOutcome = "shared" | "downloaded" | "cancelled";
 /** A backup file is a few lines per answer; anything much bigger is not one of ours. */
 const MAX_BACKUP_BYTES = 20 * 1024 * 1024;
 
-/** Must run inside the tap that asks for it: the share sheet only opens for a tap. */
-export async function saveBackupFile(backup: PhoneBackup, now: Date = new Date()): Promise<BackupOutcome> {
-	const name = backupFileName(now);
-	const file = new File([JSON.stringify(backup)], name, { type: "application/json" });
+/** Hand a file to the share sheet or, where there is none, download it. Must run inside the tap that asks for it: the share sheet only opens for a tap. */
+export async function handOverFile(file: File): Promise<BackupOutcome> {
 	if (typeof navigator.canShare === "function" && navigator.canShare({ files: [file] })) {
 		try {
-			await navigator.share({ files: [file], title: name });
+			await navigator.share({ files: [file], title: file.name });
 			return "shared";
 		} catch (e) {
 			if (e instanceof DOMException && e.name === "AbortError") return "cancelled";
@@ -27,12 +25,17 @@ export async function saveBackupFile(backup: PhoneBackup, now: Date = new Date()
 	const url = URL.createObjectURL(file);
 	const link = document.createElement("a");
 	link.href = url;
-	link.download = name;
+	link.download = file.name;
 	document.body.append(link);
 	link.click();
 	link.remove();
 	setTimeout(() => URL.revokeObjectURL(url), 30_000);
 	return "downloaded";
+}
+
+/** Must run inside the tap that asks for it. */
+export async function saveBackupFile(backup: PhoneBackup, now: Date = new Date()): Promise<BackupOutcome> {
+	return handOverFile(new File([JSON.stringify(backup)], backupFileName(now), { type: "application/json" }));
 }
 
 /** A picked file as a backup; null when it is not one of ours. */

@@ -65,13 +65,15 @@ const RESULT: UpdateResult = { cards: 12, courses: 2, reviews: 0, media: 0, medi
 const OPS: PhoneCardOp[] = [{ cardId: "c1", action: "suspend", at: "2026-11-05T09:02:00.000Z" }, { cardId: "c2", action: "edit", at: "2026-11-05T09:03:00.000Z", fields: { Front: "new" } }];
 const LINES = [{ cardId: "c1", at: "2026-11-05T09:00:00.000Z", grade: 3 as const }, { cardId: "c2", at: "2026-11-05T09:01:00.000Z", grade: 4 as const }];
 /** A source whose engine is the scripted one; `update` is only there when a test expects it to be used. */
-function sourceOf(api: PhoneStudyApi | null, extra: { unsent?: number; unsentOps?: number; update?: PhoneSource["update"]; restore?: PhoneSource["restore"] } = {}): PhoneSource {
+function sourceOf(api: PhoneStudyApi | null, extra: { unsent?: number; unsentOps?: number; update?: PhoneSource["update"]; restore?: PhoneSource["restore"]; saveCards?: PhoneSource["saveCards"]; loadCards?: PhoneSource["loadCards"] } = {}): PhoneSource {
 	const lines = LINES.slice(0, extra.unsent ?? 0);
 	const ops = OPS.slice(0, extra.unsentOps ?? 0);
 	return {
 		engine: api ? { api, meta: META, unsent: () => lines.length, unsentReviews: () => [...lines], unsentOps: () => [...ops] } : null,
 		update: extra.update ?? (async () => { throw new Error("no update expected"); }),
 		restore: extra.restore ?? (async () => { throw new Error("no restore expected"); }),
+		saveCards: extra.saveCards ?? (async () => null),
+		loadCards: extra.loadCards ?? (async () => { throw new Error("no cards file expected"); }),
 	};
 }
 /** The phone's own `me` answer, so the paired name shows; everything else the screens ask goes to the fake engine. */
