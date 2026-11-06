@@ -27,7 +27,11 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), "widget-helper-"));
 after(() => fs.rmSync(root, { recursive: true, force: true }));
 
 let n = 0;
-const scratch = (): string => fs.mkdirSync(path.join(root, `d${++n}`), { recursive: true }) && path.join(root, `d${n}`);
+const scratch = (): string => {
+	const dir = path.join(root, `d${++n}`);
+	fs.mkdirSync(dir, { recursive: true });
+	return dir;
+};
 
 const course = (over: Partial<StudyCourse> = {}): StudyCourse => ({
 	id: "anatomie",
