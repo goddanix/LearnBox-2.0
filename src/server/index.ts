@@ -28,6 +28,7 @@ export * from "./create-audio.ts";
 export * from "./create-legacy.ts";
 export * from "./create-migrate.ts";
 export * from "./anki-import.ts";
+export * from "./apkg-export.ts";
 export * from "./stores.ts";
 export { readRenderSettings, writeRenderSettings } from "../store/render-settings.ts";
 // The settings record + prompt overrides (settings-storage wave, 2026-09-19).

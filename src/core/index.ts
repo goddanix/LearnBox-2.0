@@ -81,6 +81,7 @@ export * from "./phone-lessons.ts"; // phone: which lessons it may open, how the
 export * from "./memory-study-store.ts"; // study: the ledgers in memory (the phone's working copy, tests)
 export * from "./lesson-cards.ts"; // create: cards from a lesson's statements (statements, drafts, adoption)
 export * from "./anki-import.ts"; // study: pure Anki-row → study mapping
+export * from "./apkg.ts"; // study: the .apkg export plan (study cards → Anki rows)
 // settings.ts + settings-resolution.ts (settings-storage wave, 2026-09-19):
 // the user-settings record's shape/sanitizer (pure) and its fully-resolved
 // view. Browser-safe — the Wave-4 panel imports these directly.

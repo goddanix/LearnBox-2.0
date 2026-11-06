@@ -1,6 +1,7 @@
 "use client";
 /**
- * The Study section: bring an existing Anki collection into the study ledgers.
+ * The Study section: bring an existing Anki collection into the study ledgers — and take the cards back out as an
+ * Anki package (study-export.tsx).
  *
  * Flow (owner-approved 2026-11-04): pick a collection found under Anki's data
  * folder (or type a path) → "Read" shows its decks with a suggested plan → the
@@ -20,6 +21,7 @@ import type {
 	StudyCourse,
 } from "@/src/core";
 import { CommitInput, SettingsGroup, ThinSelect } from "./controls.tsx";
+import { StudyExport } from "./study-export.tsx";
 
 const SKIP = "__skip__";
 /** Window event: the study ledgers changed (an import ran). */
@@ -287,6 +289,8 @@ export function StudySection() {
 			)}
 
 			{outcome && <ImportResult outcome={outcome} />}
+
+			<StudyExport />
 		</div>
 	);
 }
