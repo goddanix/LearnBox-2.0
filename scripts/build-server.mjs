@@ -40,7 +40,39 @@ if (exists(path.join(ROOT, "public"))) {
 }
 
 // 2) Safety: the repo's real data/ must NEVER ride along in the bundle.
+// outputFileTracingExcludes keeps it out of every route's trace, but Next
+// never applies it to the instrumentation entry (instrumentation.ts → the
+// phone gateway → config.ts' data paths): that trace lists the repo's data/
+// and Next copies it (found 2026-11-06). So: prove that no OTHER trace lists
+// data/ (a route that leaks still fails the build), drop the copy the
+// instrumentation trace made, then check that nothing is left.
 const leakedData = path.join(STANDALONE, "data");
+const repoData = path.join(ROOT, "data");
+const traceFiles = (dir) =>
+	fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+		const full = path.join(dir, entry.name);
+		if (entry.isDirectory()) return traceFiles(full);
+		return entry.name.endsWith(".nft.json") ? [full] : [];
+	});
+const nextDir = path.join(ROOT, ".next");
+const traces = [
+	...traceFiles(path.join(nextDir, "server")),
+	...fs.readdirSync(nextDir).filter((name) => name.endsWith(".nft.json")).map((name) => path.join(nextDir, name)),
+];
+for (const trace of traces) {
+	if (path.basename(trace) === "instrumentation.js.nft.json") continue;
+	const { files } = JSON.parse(fs.readFileSync(trace, "utf8"));
+	const hit = files.find((file) => path.resolve(path.dirname(trace), file).startsWith(repoData + path.sep));
+	if (hit) {
+		console.error(`[build-server] REFUSING: ${path.relative(ROOT, trace)} lists the repo's data/ (${hit}) — repo session data would ship in the app.`);
+		console.error("             Check outputFileTracingExcludes in next.config.ts.");
+		process.exit(1);
+	}
+}
+if (exists(leakedData)) {
+	fs.rmSync(leakedData, { recursive: true, force: true });
+	console.log("[build-server] removed data/ copied by the instrumentation trace");
+}
 if (exists(leakedData)) {
 	console.error("[build-server] REFUSING: standalone contains a data/ directory — repo session data would ship in the app.");
 	console.error("             Check outputFileTracingExcludes in next.config.ts.");
