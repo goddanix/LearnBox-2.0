@@ -6,6 +6,7 @@
 
 import { newReviews, readPhoneDeck } from "@/src/core";
 import type { PhoneDeck } from "@/src/core";
+import { heldCourseIds } from "./phone-db";
 import type { PhoneDb, PhoneMeta } from "./phone-db";
 import { PhoneApiError, phoneCall, phoneJson } from "./phone-http";
 
@@ -28,18 +29,44 @@ export interface PullResult {
 
 const PARALLEL_DOWNLOADS = 3;
 
-export async function pullDeck(db: PhoneDb, onProgress: (p: PullProgress) => void = () => {}, now: () => Date = () => new Date()): Promise<PullResult> {
+/**
+ * Take the Mac's deck in. `courseIds` are the courses the learner wants on the phone; without them the phone keeps the
+ * ones it holds (the first time: all the Mac has). Courses taken off the list leave the phone — their cards, their
+ * answers the Mac already has, and the pictures only they use.
+ */
+export async function pullDeck(
+	db: PhoneDb,
+	onProgress: (p: PullProgress) => void = () => {},
+	now: () => Date = () => new Date(),
+	courseIds?: readonly string[],
+): Promise<PullResult> {
 	onProgress({ phase: "deck", done: 0, total: 1 });
 	const prior = await db.load();
-	const raw = await phoneJson<unknown>(`/api/phone/deck?reviewsFrom=${prior?.meta.macReviews ?? 0}`);
+	const held = prior ? heldCourseIds(prior) : null;
+	const chosen = courseIds ?? held ?? undefined;
+	// A course the phone did not hold before has answers on the Mac this phone never saw: start the ledger from the top.
+	// (Lines it already has are recognised and not added twice.)
+	const grew = !!chosen && !!held && chosen.some((id) => !held.includes(id));
+	const from = prior && !grew ? prior.meta.macReviews : 0;
+	const query = `reviewsFrom=${from}${chosen ? `&courses=${chosen.map(encodeURIComponent).join(",")}` : ""}`;
+	const raw = await phoneJson<unknown>(`/api/phone/deck?${query}`);
 	const deck: PhoneDeck | null = readPhoneDeck(raw);
 	if (!deck) throw new PhoneApiError("The Mac sent something unexpected.", "server");
 
+	const onDeck = new Set(deck.cards.map((c) => c.id));
 	const fresh = newReviews(
 		(prior?.reviews ?? []).map((r) => r.review),
-		deck.reviews,
+		deck.reviews.filter((r) => onDeck.has(r.cardId)),
 	);
-	const meta: PhoneMeta = { v: 1, deckAt: deck.at, syncedAt: now().toISOString(), macReviews: deck.reviewsTotal };
+	const meta: PhoneMeta = {
+		v: 1,
+		deckAt: deck.at,
+		syncedAt: now().toISOString(),
+		macReviews: deck.reviewsTotal,
+		// what the Mac really gave: a course it no longer has drops out of the choice
+		courses: deck.courses.map((c) => c.id),
+		...(deck.catalog ? { catalog: deck.catalog } : {}),
+	};
 	try {
 		await db.applyDeck({ meta, courses: deck.courses, cards: deck.cards, macReviews: fresh });
 	} catch {

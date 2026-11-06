@@ -5,8 +5,8 @@
  */
 
 import { PHONE_DECK_SCHEMA } from "./contracts/mobile.ts";
-import type { PhoneDeck, PhoneMediaEntry } from "./contracts/mobile.ts";
-import type { StudyReview } from "./contracts/study.ts";
+import type { PhoneCatalog, PhoneCatalogEntry, PhoneDeck, PhoneMediaEntry } from "./contracts/mobile.ts";
+import type { StudyCard, StudyReview } from "./contracts/study.ts";
 import type { StudyStore } from "./ports.ts";
 import { mediaNamesOf } from "./study-render.ts";
 
@@ -27,13 +27,61 @@ export function newReviews(known: Iterable<StudyReview>, incoming: readonly Stud
 	return out;
 }
 
+/** The most courses a request may name (a phone has nowhere near this many; the cap only bounds the address). */
+const MAX_COURSE_IDS = 200;
+
+/**
+ * The `courses` query value of a deck request: a comma-separated list of course ids. Absent = every course
+ * (`undefined`); present but empty = none (`[]`); a list that cannot be one (too long, empty or huge ids) is `null`.
+ */
+export function readCourseIds(param: string | null): string[] | undefined | null {
+	if (param === null) return undefined;
+	if (param === "") return [];
+	const ids = param.split(",");
+	if (ids.length > MAX_COURSE_IDS || ids.some((id) => id === "" || id.length > 120)) return null;
+	return [...new Set(ids)];
+}
+
+/** Bytes of the media the given cards use, counting each file once. */
+function mediaBytes(cards: readonly StudyCard[], mediaSize: (name: string) => number | null): number {
+	const seen = new Set<string>();
+	let total = 0;
+	for (const card of cards) {
+		for (const name of mediaNamesOf(card)) {
+			if (seen.has(name)) continue;
+			seen.add(name);
+			total += mediaSize(name) ?? 0;
+		}
+	}
+	return total;
+}
+
+/** Every course with what taking it would put on a phone. */
+export function buildPhoneCatalog(store: StudyStore, mediaSize: (name: string) => number | null): PhoneCatalogEntry[] {
+	const cards = store.readCards();
+	return store.readCourses().map((c) => {
+		const own = cards.filter((card) => card.courseId === c.id);
+		return { id: c.id, name: c.name, cards: own.length, mediaBytes: mediaBytes(own, mediaSize) };
+	});
+}
+
 /**
  * Cut a deck. `mediaSize` says how big a media file is on the Mac, or null when it is not there (a card that points
  * at a missing file shows the same "missing" on the phone as on the Mac, so such names are left out). `reviewsFrom`
- * is how many ledger lines the phone already has.
+ * is how many ledger lines the phone already has. `courseIds` are the courses the phone chose (all when absent): the
+ * deck holds only their cards, the review lines of those cards and the media they use; `reviewsTotal` stays the whole
+ * ledger's length, because that is the position the phone asks from next time.
  */
-export function buildPhoneDeck(store: StudyStore, mediaSize: (name: string) => number | null, reviewsFrom: number, now: Date): PhoneDeck {
-	const cards = store.readCards();
+export function buildPhoneDeck(
+	store: StudyStore,
+	mediaSize: (name: string) => number | null,
+	reviewsFrom: number,
+	now: Date,
+	courseIds?: readonly string[],
+): PhoneDeck {
+	const chosen = courseIds ? new Set(courseIds) : null;
+	const cards = store.readCards().filter((c) => !chosen || chosen.has(c.courseId));
+	const ids = new Set(cards.map((c) => c.id));
 	const all = store.readReviews();
 	const from = Number.isInteger(reviewsFrom) && reviewsFrom >= 0 && reviewsFrom <= all.length ? reviewsFrom : 0;
 	const names = new Set<string>();
@@ -46,13 +94,36 @@ export function buildPhoneDeck(store: StudyStore, mediaSize: (name: string) => n
 	return {
 		v: PHONE_DECK_SCHEMA,
 		at: now.toISOString(),
-		courses: store.readCourses(),
+		courses: store.readCourses().filter((c) => !chosen || chosen.has(c.id)),
 		cards,
 		reviewsFrom: from,
-		reviews: all.slice(from),
+		reviews: chosen ? all.slice(from).filter((r) => ids.has(r.cardId)) : all.slice(from),
 		reviewsTotal: all.length,
 		media,
+		catalog: buildPhoneCatalog(store, mediaSize),
 	};
+}
+
+/** The catalog as the phone gets it. */
+export function phoneCatalogOf(store: StudyStore, mediaSize: (name: string) => number | null): PhoneCatalog {
+	return { v: PHONE_DECK_SCHEMA, courses: buildPhoneCatalog(store, mediaSize) };
+}
+
+/** A catalog read off the wire (or out of the phone's meta): the shape is checked, anything else is null. */
+export function readPhoneCatalogEntries(raw: unknown): PhoneCatalogEntry[] | null {
+	if (!Array.isArray(raw)) return null;
+	const out: PhoneCatalogEntry[] = [];
+	for (const e of raw) {
+		if (!isRecord(e) || typeof e.id !== "string" || typeof e.name !== "string") return null;
+		if (typeof e.cards !== "number" || !Number.isFinite(e.cards) || typeof e.mediaBytes !== "number" || !Number.isFinite(e.mediaBytes)) return null;
+		out.push({ id: e.id, name: e.name, cards: e.cards, mediaBytes: e.mediaBytes });
+	}
+	return out;
+}
+
+/** GET /api/phone/catalog read back. */
+export function readPhoneCatalog(raw: unknown): PhoneCatalogEntry[] | null {
+	return isRecord(raw) && raw.v === PHONE_DECK_SCHEMA ? readPhoneCatalogEntries(raw.courses) : null;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -67,5 +138,6 @@ export function readPhoneDeck(raw: unknown): PhoneDeck | null {
 	if (!cards.every((c) => isRecord(c) && typeof c.id === "string" && typeof c.courseId === "string" && isRecord(c.fields))) return null;
 	if (!reviews.every((r) => isRecord(r) && typeof r.cardId === "string" && typeof r.at === "string" && [1, 2, 3, 4].includes(r.grade as number))) return null;
 	if (!media.every((m) => isRecord(m) && typeof m.name === "string" && typeof m.size === "number")) return null;
+	if (raw.catalog !== undefined && readPhoneCatalogEntries(raw.catalog) === null) return null;
 	return raw as unknown as PhoneDeck;
 }

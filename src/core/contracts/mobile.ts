@@ -96,9 +96,26 @@ export interface PhoneMediaEntry {
 	size: number;
 }
 
+/** One course as the phone's choice lists it (Slice 10g): what taking it would put on the phone. */
+export interface PhoneCatalogEntry {
+	id: string;
+	name: string;
+	/** Live cards in the course. */
+	cards: number;
+	/** Bytes of the pictures and sounds those cards use (what the Mac has of them). */
+	mediaBytes: number;
+}
+
+/** GET /api/phone/catalog: every course on the Mac, so the phone can offer a choice before it takes anything. */
+export interface PhoneCatalog {
+	v: typeof PHONE_DECK_SCHEMA;
+	courses: PhoneCatalogEntry[];
+}
+
 /**
- * What the Mac hands a phone to study from (GET /api/phone/deck): every course and live card, the review ledger from
- * where the phone stopped, and the list of media files the cards ask for (fetched one by one, GET /api/phone/media/…).
+ * What the Mac hands a phone to study from (GET /api/phone/deck[?courses=a,b]): the chosen courses (all, when none are
+ * named) with their live cards, the review ledger from where the phone stopped — only the lines of those cards — and
+ * the list of media files the cards ask for (fetched one by one, GET /api/phone/media/…).
  */
 export interface PhoneDeck {
 	v: typeof PHONE_DECK_SCHEMA;
@@ -112,6 +129,8 @@ export interface PhoneDeck {
 	/** …and how many lines the ledger holds in all: the phone asks from here next time. */
 	reviewsTotal: number;
 	media: PhoneMediaEntry[];
+	/** Every course on the Mac, chosen or not (absent in decks cut before Slice 10g). */
+	catalog?: PhoneCatalogEntry[];
 }
 
 // ─── answers going back to the Mac (Slice 10d) ───────────────────────────────

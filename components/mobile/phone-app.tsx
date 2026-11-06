@@ -2,14 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { PhoneLesson, StudyCourseSummary, StudyLinkCard } from "@/src/core";
+import type { PhoneCatalogEntry, PhoneLesson, StudyCourseSummary, StudyLinkCard } from "@/src/core";
 import { buildPhoneBackup, cardChangesText } from "@/src/core";
 import { keepAppForOffline } from "./offline-shell";
 import { getPhoneToken, phoneFetch, restorePhoneToken } from "./phone-auth";
 import { dismissInstallHint, installHintDismissed, isStandalone } from "./phone-install-hint";
 import { readBackupFile, saveBackupFile } from "./phone-backup";
 import { PhoneCourses, PhoneSetup } from "./phone-courses";
+import { fetchPhoneCatalog } from "./phone-catalog";
 import { PhoneApiError } from "./phone-http";
+import { PhoneLibrary } from "./phone-library";
 import { PhoneLesson as PhoneLessonPage } from "./phone-lesson";
 import { PhoneLessonStart } from "./phone-lesson-start";
 import { listPhoneLessons, startPhoneLesson } from "./phone-lessons";
@@ -84,6 +86,9 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 	const [updating, setUpdating] = useState<PullProgress | null>(null);
 	const [updated, setUpdated] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
+	/** The Mac's list of courses, asked while the library or the first-run choice is up (null: not asked, or not answered). */
+	const [catalog, setCatalog] = useState<PhoneCatalogEntry[] | null>(null);
+	const [catalogFailed, setCatalogFailed] = useState(false);
 	const online = useOnline();
 	const storage = usePhoneStorage();
 	/** Safari only, until dismissed: the nudge to make the home-screen icon from this page. */
@@ -201,6 +206,25 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 		};
 	}, [courses, route.kind, online, onApiError]);
 
+	// the Mac's list of courses, for the first-run choice and the library; a failed ask leaves the last update's list
+	const needCatalog = ready && !!source && (route.kind === "library" || source.engine === null) && online;
+	useEffect(() => {
+		if (!needCatalog) return;
+		let live = true;
+		setCatalogFailed(false);
+		fetchPhoneCatalog().then(
+			(list) => live && setCatalog(list),
+			(e: unknown) => {
+				if (!live) return;
+				setCatalogFailed(true);
+				onApiError(e);
+			},
+		);
+		return () => {
+			live = false;
+		};
+	}, [needCatalog, onApiError]);
+
 	// the faces of the cards a lesson is about to start from, from the phone's own copy
 	useEffect(() => {
 		if (route.kind !== "learn") {
@@ -235,26 +259,33 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 		}
 	};
 
-	const update = useCallback(async () => {
-		const current = sourceRef.current;
-		if (!current || updating) return;
-		setError(null);
-		setUpdated(null);
-		setNotice(null);
-		setUpdating({ phase: "deck", done: 0, total: 1 });
-		try {
-			const { result, source: next } = await current.update(setUpdating);
-			sourceRef.current = next;
-			setSource(next);
-			setUpdated(updateSummary(result));
-			await loadCourses();
-		} catch (e) {
-			setError(e instanceof Error ? e.message : String(e));
-			onApiError(e);
-		} finally {
-			setUpdating(null);
-		}
-	}, [updating, loadCourses, onApiError]);
+	/** Update from the Mac; `courseIds` change which courses the phone holds. True when it worked. */
+	const update = useCallback(
+		async (courseIds?: readonly string[]): Promise<boolean> => {
+			const current = sourceRef.current;
+			if (!current || updating) return false;
+			setError(null);
+			setUpdated(null);
+			setNotice(null);
+			setUpdating({ phase: "deck", done: 0, total: 1 });
+			try {
+				const { result, source: next } = await current.update(setUpdating, courseIds);
+				sourceRef.current = next;
+				setSource(next);
+				setUpdated(updateSummary(result));
+				setCatalog(null);
+				await loadCourses();
+				return true;
+			} catch (e) {
+				setError(e instanceof Error ? e.message : String(e));
+				onApiError(e);
+				return false;
+			} finally {
+				setUpdating(null);
+			}
+		},
+		[updating, loadCourses, onApiError],
+	);
 
 	/** The answers only this phone has, handed to the share sheet. Runs inside the tap: nothing is awaited before the share. */
 	const saveBackup = () => {
@@ -300,10 +331,33 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 	if (fatal) return <p className="px-4 py-10 text-sm text-red-400" role="alert" data-testid="phone-error">{fatal}</p>;
 	if (!source) return <p className="px-4 py-10 text-sm text-muted-foreground">Loading…</p>;
 	const engine = source.engine;
-	if (!engine) return <PhoneSetup updating={updating} error={error} onStart={() => void update()} />;
+	if (!engine) return <PhoneSetup updating={updating} error={error} catalog={catalog} onStart={(ids) => void update(ids)} />;
 
 	const routeCourseId = route.kind === "course" || route.kind === "learn" ? route.courseId : null;
 	if (routeCourseId && !courses && !error) return <p className="px-4 py-10 text-sm text-muted-foreground">Loading…</p>;
+	if (route.kind === "library") {
+		const held = engine.meta.courses ?? courses?.map((c) => c.id);
+		if (!held) return <p className="px-4 py-10 text-sm text-muted-foreground">Loading…</p>;
+		const entries = catalog ?? engine.meta.catalog ?? (courses ?? []).map((c): PhoneCatalogEntry => ({ id: c.id, name: c.name, cards: c.total, mediaBytes: 0 }));
+		return (
+			<PhoneLibrary
+				entries={entries}
+				held={held}
+				listState={catalog ? "mac" : catalogFailed || !online ? "phone" : "loading"}
+				unsent={engine.unsent()}
+				unsentOps={engine.unsentOps().length}
+				updating={updating}
+				error={error}
+				online={online}
+				onApply={(ids) =>
+					void update(ids).then((ok) => {
+						if (ok) goBack(() => navigate({ kind: "courses" }));
+					})
+				}
+				onBack={() => goBack(() => navigate({ kind: "courses" }))}
+			/>
+		);
+	}
 	if (route.kind === "lesson") {
 		return (
 			<PhoneLessonPage
@@ -378,6 +432,7 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 			onLearn={(courseId, cardIds) => navigate({ kind: "learn", courseId, cardIds })}
 			onOpenLesson={(chatId) => navigate({ kind: "lesson", chatId })}
 			onUpdate={() => void update()}
+			onLibrary={() => navigate({ kind: "library" })}
 		/>
 	);
 }

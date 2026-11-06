@@ -31,18 +31,19 @@ export interface RestoreResult {
 export interface PhoneSource {
 	/** null: no deck on this phone yet. */
 	engine: PhoneEngine | null;
-	update(onProgress: (p: PullProgress) => void): Promise<{ result: UpdateResult; source: PhoneSource }>;
+	/** `courseIds`: the courses to hold on the phone from now on (without them: the ones it holds, or all on the first run). */
+	update(onProgress: (p: PullProgress) => void, courseIds?: readonly string[]): Promise<{ result: UpdateResult; source: PhoneSource }>;
 	restore(backup: { reviews: readonly StudyReview[]; ops?: readonly PhoneCardOp[] }): Promise<RestoreResult & { source: PhoneSource }>;
 }
 
 export function sourceOver(db: PhoneDb, engine: PhoneEngine | null): PhoneSource {
 	return {
 		engine,
-		async update(onProgress) {
+		async update(onProgress, courseIds) {
 			// the answers and card changes first: if the Mac cannot be reached nothing else is attempted, and nothing is lost
 			if (engine && engine.unsent() + engine.unsentOps().length > 0) onProgress({ phase: "send", done: 0, total: 1 });
 			const pushed = await pushChanges(db);
-			const result = await pullDeck(db, onProgress);
+			const result = await pullDeck(db, onProgress, undefined, courseIds);
 			return {
 				result: { ...result, sent: pushed.reviews, sentOps: pushed.ops, newerOnMac: pushed.cardChanges.newerOnMac },
 				source: sourceOver(db, await startPhoneEngine(db)),

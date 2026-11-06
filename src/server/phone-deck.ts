@@ -5,14 +5,22 @@
  */
 
 import * as fs from "node:fs";
-import type { PhoneDeck } from "../core/contracts/mobile.ts";
-import { buildPhoneDeck } from "../core/phone-deck.ts";
+import type { PhoneCatalog, PhoneDeck } from "../core/contracts/mobile.ts";
+import { buildPhoneDeck, phoneCatalogOf } from "../core/phone-deck.ts";
 import { defaultStudyDeps, mediaFile } from "./study.ts";
 import type { StudyDeps } from "./study.ts";
 
-/** The deck as it stands now; `reviewsFrom` is how many ledger lines the phone already holds. */
-export function phoneDeck(reviewsFrom = 0, now: Date = new Date(), deps: StudyDeps = defaultStudyDeps()): PhoneDeck {
-	return buildPhoneDeck(deps.store, (name) => mediaFile(deps.mediaDir, name)?.size ?? null, reviewsFrom, now);
+/**
+ * The deck as it stands now; `reviewsFrom` is how many ledger lines the phone already holds, `courseIds` the courses
+ * it chose (all when absent).
+ */
+export function phoneDeck(reviewsFrom = 0, now: Date = new Date(), deps: StudyDeps = defaultStudyDeps(), courseIds?: readonly string[]): PhoneDeck {
+	return buildPhoneDeck(deps.store, (name) => mediaFile(deps.mediaDir, name)?.size ?? null, reviewsFrom, now, courseIds);
+}
+
+/** Every course with what it would put on a phone: the list the phone chooses from. */
+export function phoneCatalog(deps: StudyDeps = defaultStudyDeps()): PhoneCatalog {
+	return phoneCatalogOf(deps.store, (name) => mediaFile(deps.mediaDir, name)?.size ?? null);
 }
 
 /** One media file's bytes and type, or null when there is no such (safe, small enough) file. */

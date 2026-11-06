@@ -103,7 +103,7 @@ describe("what the gateway lets through", () => {
 		}
 	});
 	it("asks the listed API routes for a paired phone", () => {
-		for (const [m, p] of [["GET", "/api/phone/deck"], ["GET", "/api/phone/deck/"], ["POST", "/api/phone/sync"], ["POST", "/api/phone/sync/"], ["GET", "/api/phone/media/arm.png"], ["GET", "/api/phone/media/arm%20bone.png"]] as const) {
+		for (const [m, p] of [["GET", "/api/phone/deck"], ["GET", "/api/phone/deck/"], ["GET", "/api/phone/catalog"], ["GET", "/api/phone/catalog/"], ["POST", "/api/phone/sync"], ["POST", "/api/phone/sync/"], ["GET", "/api/phone/media/arm.png"], ["GET", "/api/phone/media/arm%20bone.png"]] as const) {
 			assert.equal(mobileRoute(m, p), "device", `${m} ${p}`);
 		}
 	});
@@ -140,7 +140,7 @@ describe("what the gateway lets through", () => {
 				["GET", "/api/study/courses"], ["GET", "/api/study/next"], ["GET", "/api/study/weak"], ["POST", "/api/study/answer"], ["POST", "/api/study/undo"],
 				["GET", "/api/phone/sync"], ["POST", "/api/phone/backup"], ["POST", "/api/mobile/backup"], ["GET", "/api/mobile/backup"], ["POST", "/api/phone/sync/x"],
 			["GET", "/api/chats"], ["GET", "/api/create/jobs"], ["GET", "/api/library"], ["GET", "/api/mobile"], ["POST", "/api/mobile/pair"], ["GET", "/api/events"],
-			["GET", "/m-api/pair"], ["GET", "/mobile"], ["GET", "/mm"], ["GET", "/M"], ["GET", "/_next/static"], ["GET", "/_next/data/x.json"], ["GET", "/_next/image"], ["GET", "/fonts"], ["GET", "/fonts/"], ["POST", "/api/phone/deck"], ["GET", "/api/phone/deck/x"], ["GET", "/api/phone/media"], ["GET", "/api/phone/media/"], ["GET", "/api/phone/media/a/b.png"], ["POST", "/api/phone/media/a.png"], ["GET", "/api/phone/media/%2e%2e"], ["GET", "/api/phone/media/..%2fx"], ["GET", "/api/phone"], ["GET", "/fonts/a/b.ttf"], ["POST", "/fonts/cmunbx.ttf"], ["GET", "/siwc/x.js"], ["POST", "/sw.js"], ["GET", "/sw.js/x"], ["GET", "/SW.js"], ["GET", "/sw.js.map"],
+			["GET", "/m-api/pair"], ["GET", "/mobile"], ["GET", "/mm"], ["GET", "/M"], ["GET", "/_next/static"], ["GET", "/_next/data/x.json"], ["GET", "/_next/image"], ["GET", "/fonts"], ["GET", "/fonts/"], ["POST", "/api/phone/deck"], ["GET", "/api/phone/deck/x"], ["POST", "/api/phone/catalog"], ["GET", "/api/phone/catalog/x"], ["GET", "/api/phone/media"], ["GET", "/api/phone/media/"], ["GET", "/api/phone/media/a/b.png"], ["POST", "/api/phone/media/a.png"], ["GET", "/api/phone/media/%2e%2e"], ["GET", "/api/phone/media/..%2fx"], ["GET", "/api/phone"], ["GET", "/fonts/a/b.ttf"], ["POST", "/fonts/cmunbx.ttf"], ["GET", "/siwc/x.js"], ["POST", "/sw.js"], ["GET", "/sw.js/x"], ["GET", "/SW.js"], ["GET", "/sw.js.map"],
 		] as const) {
 			assert.equal(mobileRoute(m, p), "deny", `${m} ${p}`);
 		}

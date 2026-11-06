@@ -12,12 +12,13 @@ import { startPhoneEngine, toDataUri } from "../components/mobile/phone-engine.t
 import { PhoneApiError, phoneJson } from "../components/mobile/phone-http.ts";
 import { getPhoneToken, setPhoneToken } from "../components/mobile/phone-auth.ts";
 import { sourceOver } from "../components/mobile/phone-source.ts";
+import { fetchPhoneCatalog } from "../components/mobile/phone-catalog.ts";
 import { pullDeck } from "../components/mobile/pull-deck.ts";
 import type { PullProgress } from "../components/mobile/pull-deck.ts";
 import { pushChanges } from "../components/mobile/push-changes.ts";
 import type { StudyCard, StudyCourse, StudyReview } from "../src/core/contracts/study.ts";
 import { createMemoryStudyStore } from "../src/core/memory-study-store.ts";
-import { buildPhoneDeck } from "../src/core/phone-deck.ts";
+import { buildPhoneDeck, readCourseIds } from "../src/core/phone-deck.ts";
 import { acceptPhoneChanges, buildPhoneBackup, readPhoneBackup } from "../src/core/phone-sync.ts";
 
 const NOW = new Date(2026, 10, 4, 10, 0, 0);
@@ -36,6 +37,12 @@ const card = (id: string, over: Partial<StudyCard> = {}): StudyCard => ({
 const review = (cardId: string, at: string, grade: 1 | 2 | 3 | 4 = 3): StudyReview => ({ cardId, at, grade });
 const META: PhoneMeta = { v: 1, deckAt: NOW.toISOString(), syncedAt: NOW.toISOString(), macReviews: 0 };
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer;
+
+/** What the Mac answers to GET /api/phone/deck?reviewsFrom=N[&courses=a,b]. */
+const deckFor = (store: ReturnType<typeof createMemoryStudyStore>, url: string, size: (name: string) => number | null = () => null) => {
+	const params = new URL(url, "http://x").searchParams;
+	return buildPhoneDeck(store, size, Number(params.get("reviewsFrom")), NOW, readCourseIds(params.get("courses")) ?? undefined);
+};
 
 const tokens = new Map<string, string>();
 Object.assign(globalThis, {
@@ -101,13 +108,27 @@ describe("the phone's storage (in memory)", () => {
 
 	it("replaces the cards on every deck, adds the Mac's review lines, and keeps what was answered on the phone", async () => {
 		const db = createMemoryPhoneDb();
-		await db.applyDeck({ meta: META, courses: [course("k1")], cards: [card("1"), card("2")], macReviews: [review("1", "2026-11-01T09:00:00.000Z")] });
+		await db.applyDeck({ meta: META, courses: [course("k1")], cards: [card("1"), card("2")], macReviews: [review("2", "2026-11-01T09:00:00.000Z")] });
 		await db.addReviews([review("2", "2026-11-04T09:00:00.000Z")]);
-		await db.applyDeck({ meta: { ...META, macReviews: 2 }, courses: [course("k1")], cards: [card("2")], macReviews: [review("1", "2026-11-02T09:00:00.000Z")] });
+		await db.applyDeck({ meta: { ...META, macReviews: 2 }, courses: [course("k1")], cards: [card("1"), card("2")], macReviews: [review("2", "2026-11-02T09:00:00.000Z")] });
 		const snap = (await db.load())!;
-		assert.deepEqual(snap.cards.map((c) => c.id), ["2"]);
+		assert.deepEqual(snap.cards.map((c) => c.id), ["1", "2"]);
 		assert.deepEqual(snap.reviews.map((r) => [r.src, r.sent]), [["mac", true], ["phone", false], ["mac", true]]);
 		assert.equal(snap.meta.macReviews, 2);
+	});
+
+	it("lets the answers of cards that left the deck go — except the ones the Mac does not have yet", async () => {
+		const db = createMemoryPhoneDb();
+		await db.applyDeck({ meta: META, courses: [course("k1"), course("k2")], cards: [card("1"), card("2", { courseId: "k2" })], macReviews: [review("1", "2026-11-01T09:00:00.000Z"), review("2", "2026-11-01T09:00:00.000Z")] });
+		await db.addReviews([review("2", "2026-11-04T09:00:00.000Z")]);
+		await db.applyDeck({
+			meta: { ...META, courses: ["k1"] },
+			courses: [course("k1")],
+			cards: [card("1")],
+			macReviews: [review("1", "2026-11-02T09:00:00.000Z"), review("2", "2026-11-02T09:00:00.000Z")],
+		});
+		const snap = (await db.load())!;
+		assert.deepEqual(snap.reviews.map((r) => [r.review.cardId, r.review.at.slice(0, 10), r.sent]), [["1", "2026-11-01", true], ["2", "2026-11-04", false], ["1", "2026-11-02", true]], "the Mac's line for card 2 is not taken in, the unsent one stays");
 	});
 
 	it("keeps media by name, gives back only what it has, and forgets what is deleted", async () => {
@@ -195,9 +216,9 @@ describe("the study engine on the phone", () => {
 
 describe("taking the Mac's deck onto the phone", () => {
 	/** A Mac with these ledgers; it records what the phone asked for. */
-	function mac(init: { cards: StudyCard[]; reviews?: StudyReview[]; media?: Record<string, ArrayBuffer>; failMedia?: string[]; down?: boolean }) {
+	function mac(init: { cards: StudyCard[]; courses?: StudyCourse[]; reviews?: StudyReview[]; media?: Record<string, ArrayBuffer>; failMedia?: string[]; down?: boolean }) {
 		const asked: string[] = [];
-		const store = createMemoryStudyStore({ courses: [course("k1")], cards: init.cards, reviews: init.reviews ?? [] });
+		const store = createMemoryStudyStore({ courses: init.courses ?? [course("k1")], cards: init.cards, reviews: init.reviews ?? [] });
 		const files = init.media ?? {};
 		globalThis.fetch = (async (input: unknown, request?: RequestInit) => {
 			const url = String(input);
@@ -206,10 +227,8 @@ describe("taking the Mac's deck onto the phone", () => {
 			if (url === "/api/phone/sync" && request?.method === "POST") {
 				return Response.json(acceptPhoneChanges(store, JSON.parse(String(request.body)) as { reviews?: unknown; ops?: unknown }));
 			}
-			if (url.startsWith("/api/phone/deck?reviewsFrom=")) {
-				const from = Number(new URL(url, "http://x").searchParams.get("reviewsFrom"));
-				return Response.json(buildPhoneDeck(store, (n) => (files[n] ? files[n]!.byteLength : null), from, NOW));
-			}
+			if (url.startsWith("/api/phone/deck?reviewsFrom=")) return Response.json(deckFor(store, url, (n) => (files[n] ? files[n]!.byteLength : null)));
+			if (url === "/api/phone/catalog") return Response.json({ v: 1, courses: buildPhoneDeck(store, () => null, 0, NOW).catalog });
 			if (url.startsWith("/api/phone/media/")) {
 				const name = decodeURIComponent(url.slice("/api/phone/media/".length));
 				if (init.failMedia?.includes(name)) return new Response(JSON.stringify({ error: "Not found" }), { status: 404 });
@@ -233,7 +252,14 @@ describe("taking the Mac's deck onto the phone", () => {
 		assert.deepEqual(result, { cards: 2, courses: 1, reviews: 2, media: 2, mediaFailed: 0 });
 		const snap = (await db.load())!;
 		assert.deepEqual([snap.courses.length, snap.cards.length, snap.reviews.length], [1, 2, 2]);
-		assert.deepEqual(snap.meta, { v: 1, deckAt: NOW.toISOString(), syncedAt: NOW.toISOString(), macReviews: 2 });
+		assert.deepEqual(snap.meta, {
+			v: 1,
+			deckAt: NOW.toISOString(),
+			syncedAt: NOW.toISOString(),
+			macReviews: 2,
+			courses: ["k1"],
+			catalog: [{ id: "k1", name: "k1", cards: 2, mediaBytes: 8 }],
+		});
 		assert.deepEqual((await db.mediaNames()).sort(), ["a.png", "my pic.png"]);
 		assert.equal((await db.getMedia(["a.png"])).get("a.png")!.mime, "image/png");
 		assert.ok(asked.includes("/api/phone/media/my%20pic.png"), "names are encoded in the address");
@@ -253,7 +279,7 @@ describe("taking the Mac's deck onto the phone", () => {
 			media: { "a.png": PNG, "c.png": PNG },
 		});
 		const result = await pullDeck(db, undefined, () => NOW);
-		assert.ok(second.asked.includes("/api/phone/deck?reviewsFrom=1"));
+		assert.ok(second.asked.includes("/api/phone/deck?reviewsFrom=1&courses=k1"), "and only for the courses it holds");
 		assert.deepEqual(second.asked.filter((u) => u.startsWith("/api/phone/media/")), ["/api/phone/media/c.png"], "a.png is already on the phone");
 		assert.deepEqual(result, { cards: 1, courses: 1, reviews: 1, media: 1, mediaFailed: 0 });
 		assert.deepEqual((await db.mediaNames()).sort(), ["a.png", "c.png"], "b.png is gone");
@@ -317,6 +343,109 @@ describe("taking the Mac's deck onto the phone", () => {
 		assert.deepEqual((await db.load())!.cards.map((c) => c.id), ["old"]);
 	});
 
+	describe("with a choice of courses", () => {
+		const two = [course("k1"), course("k2")];
+		const cards = [card("1"), card("2"), card("3", { courseId: "k2" }), card("4", { courseId: "k2" })];
+		const lines = [review("1", "2026-11-01T09:00:00.000Z"), review("3", "2026-11-02T09:00:00.000Z"), review("4", "2026-11-03T09:00:00.000Z")];
+
+		it("takes in only the chosen courses, and remembers the choice and the Mac's whole list", async () => {
+			const db = createMemoryPhoneDb();
+			const m = mac({ courses: two, cards, reviews: lines });
+			const result = await pullDeck(db, undefined, () => NOW, ["k2"]);
+			assert.ok(m.asked.includes("/api/phone/deck?reviewsFrom=0&courses=k2"));
+			assert.deepEqual([result.courses, result.cards, result.reviews], [1, 2, 2]);
+			const snap = (await db.load())!;
+			assert.deepEqual(snap.courses.map((c) => c.id), ["k2"]);
+			assert.deepEqual(snap.meta.courses, ["k2"]);
+			assert.deepEqual(snap.meta.catalog?.map((c) => [c.id, c.cards]), [["k1", 2], ["k2", 2]]);
+			assert.equal(snap.meta.macReviews, 3, "the ledger position is the Mac's whole ledger");
+		});
+
+		it("keeps asking for the courses it holds when no new choice is made", async () => {
+			const db = createMemoryPhoneDb();
+			mac({ courses: two, cards, reviews: lines });
+			await pullDeck(db, undefined, () => NOW, ["k1"]);
+			const second = mac({ courses: [...two, course("k3")], cards: [...cards, card("5", { courseId: "k3" })], reviews: lines });
+			await pullDeck(db, undefined, () => NOW);
+			assert.ok(second.asked.includes("/api/phone/deck?reviewsFrom=3&courses=k1"), second.asked.join(" "));
+			const snap = (await db.load())!;
+			assert.deepEqual(snap.courses.map((c) => c.id), ["k1"], "a course new on the Mac is not taken unasked");
+			assert.deepEqual(snap.meta.catalog?.map((c) => c.id), ["k1", "k2", "k3"], "…but it is on the list");
+		});
+
+		it("treats a phone from before the choice as holding the courses it has", async () => {
+			const db = await phoneWith([card("1")], []);
+			const m = mac({ courses: two, cards, reviews: lines });
+			await pullDeck(db, undefined, () => NOW);
+			assert.ok(m.asked.includes("/api/phone/deck?reviewsFrom=0&courses=k1"), m.asked.join(" "));
+			assert.deepEqual((await db.load())!.meta.courses, ["k1"]);
+		});
+
+		it("lets a course go: its cards, the answers the Mac has, and the pictures only it uses", async () => {
+			const db = createMemoryPhoneDb();
+			const files = { "a.png": PNG, "b.png": PNG };
+			mac({ courses: two, cards: [withPic("1", "a.png"), card("2"), withPic("3", "b.png", "a.png")].map((c, i) => (i === 2 ? { ...c, courseId: "k2" } : c)), reviews: lines, media: files });
+			await pullDeck(db, undefined, () => NOW, ["k1", "k2"]);
+			assert.deepEqual((await db.mediaNames()).sort(), ["a.png", "b.png"]);
+			mac({ courses: two, cards: [withPic("1", "a.png"), card("2"), { ...withPic("3", "b.png", "a.png"), courseId: "k2" }], reviews: lines, media: files });
+			await pullDeck(db, undefined, () => NOW, ["k1"]);
+			const snap = (await db.load())!;
+			assert.deepEqual(snap.cards.map((c) => c.id), ["1", "2"]);
+			assert.deepEqual(snap.reviews.map((r) => r.review.cardId), ["1"], "the answers of k2's cards left with it");
+			assert.deepEqual(await db.mediaNames(), ["a.png"], "b.png only k2 used");
+		});
+
+		it("keeps answers the Mac does not have yet, even of a course that leaves", async () => {
+			const db = createMemoryPhoneDb();
+			mac({ courses: two, cards, reviews: [] });
+			await pullDeck(db, undefined, () => NOW, ["k1", "k2"]);
+			await db.addReviews([review("3", "2026-11-04T09:00:00.000Z")]);
+			await pullDeck(db, undefined, () => NOW, ["k1"]);
+			assert.deepEqual((await db.unsentReviews()).map((r) => r.cardId), ["3"]);
+		});
+
+		it("starts the ledger from the top when a course comes back, and counts no line twice", async () => {
+			const db = createMemoryPhoneDb();
+			mac({ courses: two, cards, reviews: lines });
+			await pullDeck(db, undefined, () => NOW, ["k1"]);
+			const m = mac({ courses: two, cards, reviews: lines });
+			const result = await pullDeck(db, undefined, () => NOW, ["k1", "k2"]);
+			assert.ok(m.asked.includes("/api/phone/deck?reviewsFrom=0&courses=k1,k2"), m.asked.join(" "));
+			assert.equal(result.reviews, 2, "k2's two lines; k1's line is already here");
+			const snap = (await db.load())!;
+			assert.deepEqual(snap.reviews.map((r) => r.review.cardId).sort(), ["1", "3", "4"]);
+			assert.deepEqual(snap.meta.courses, ["k1", "k2"]);
+		});
+
+		it("drops a course the Mac no longer has from the choice", async () => {
+			const db = createMemoryPhoneDb();
+			mac({ courses: two, cards, reviews: [] });
+			await pullDeck(db, undefined, () => NOW, ["k1", "k2"]);
+			mac({ courses: [course("k1")], cards: [card("1"), card("2")], reviews: [] });
+			await pullDeck(db, undefined, () => NOW);
+			const snap = (await db.load())!;
+			assert.deepEqual([snap.courses.map((c) => c.id), snap.meta.courses], [["k1"], ["k1"]]);
+		});
+
+		it("holds no course at all when the choice is empty", async () => {
+			const db = createMemoryPhoneDb();
+			const m = mac({ courses: two, cards, reviews: lines });
+			await pullDeck(db, undefined, () => NOW, ["k1"]);
+			await pullDeck(db, undefined, () => NOW, []);
+			assert.ok(m.asked.some((u) => u.endsWith("&courses=")));
+			assert.deepEqual((await db.load())!.cards, []);
+		});
+
+		it("asks the Mac for the list of courses, and refuses something that is not one", async () => {
+			mac({ courses: two, cards, reviews: [] });
+			assert.deepEqual((await fetchPhoneCatalog()).map((c) => [c.id, c.cards]), [["k1", 2], ["k2", 2]]);
+			globalThis.fetch = (async () => Response.json({ v: 1, courses: "no" })) as typeof fetch;
+			await assert.rejects(fetchPhoneCatalog(), (e) => e instanceof PhoneApiError && /unexpected/.test(e.message));
+			globalThis.fetch = (async () => new Response("{}", { status: 401 })) as typeof fetch;
+			await assert.rejects(fetchPhoneCatalog(), (e) => e instanceof PhoneApiError && e.kind === "unpaired");
+		});
+	});
+
 	it("says the phone's storage is the problem when it cannot keep the cards", async () => {
 		const db = createMemoryPhoneDb();
 		db.applyDeck = async () => {
@@ -343,7 +472,7 @@ describe("the phone's answers on their way to the Mac", () => {
 				posts.push((body.reviews ?? body.ops ?? []).length);
 				return Response.json(acceptPhoneChanges(store, body));
 			}
-			if (url.startsWith("/api/phone/deck?reviewsFrom=")) return Response.json(buildPhoneDeck(store, () => null, Number(new URL(url, "http://x").searchParams.get("reviewsFrom")), NOW));
+			if (url.startsWith("/api/phone/deck?reviewsFrom=")) return Response.json(deckFor(store, url));
 			return new Response("{}", { status: 404 });
 		}) as typeof fetch;
 		return { store, posts, asked, goDown: () => (down = true), comeUp: () => (down = false) };

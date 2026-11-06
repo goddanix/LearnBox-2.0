@@ -13,13 +13,15 @@ describe("the phone's address", () => {
 			{ kind: "learn", courseId: "anat", cardIds: [] },
 			{ kind: "learn", courseId: "anat", cardIds: ["c1", "crt_x_p002-c01", "a/b"] },
 			{ kind: "lesson", chatId: "chat_mhx4k2_1a2b3c4d" },
+			{ kind: "library" },
 		];
 		for (const r of routes) assert.deepEqual(parsePhoneHash(formatPhoneHash(r)), r, JSON.stringify(r));
 		assert.equal(formatPhoneHash({ kind: "courses" }), "");
+		assert.equal(formatPhoneHash({ kind: "library" }), "#/library");
 		assert.equal(formatPhoneHash({ kind: "learn", courseId: "k", cardIds: ["a", "b"] }), "#/learn/k/a/b");
 	});
 	it("reads anything it does not know as the course list", () => {
-		for (const h of ["", "#", "#/", "#/c", "#/c/", "#/c//x", "#/c/a/b", "#/lesson", "#/lesson/a/b", "#/learn", "#/learn/", "#/learn//a", "#/nope/x", "#/c/%E0%A4%A", "#c/x"]) {
+		for (const h of ["", "#", "#/", "#/c", "#/c/", "#/c//x", "#/c/a/b", "#/lesson", "#/lesson/a/b", "#/library/x", "#/library/", "#/learn", "#/learn/", "#/learn//a", "#/nope/x", "#/c/%E0%A4%A", "#c/x"]) {
 			assert.deepEqual(parsePhoneHash(h), { kind: "courses" }, JSON.stringify(h));
 		}
 	});

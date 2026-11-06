@@ -1,8 +1,10 @@
 "use client";
 
-import { DownloadIcon, GraduationCapIcon, RefreshCwIcon } from "lucide-react";
+import { useState } from "react";
+import { DownloadIcon, FolderIcon, GraduationCapIcon, RefreshCwIcon } from "lucide-react";
 import { describeUnsent } from "@/src/core";
-import type { PhoneLesson, StudyCourseSummary, StudyLinkCard, StudyQueueCounts } from "@/src/core";
+import type { PhoneCatalogEntry, PhoneLesson, StudyCourseSummary, StudyLinkCard, StudyQueueCounts } from "@/src/core";
+import { PhoneCourseChoice } from "./phone-course-choice";
 import { PhoneLessonList, PhoneWeakSpots } from "./phone-course-extras";
 import { formatBytes } from "./phone-storage";
 import type { PhoneStorageStatus } from "./phone-storage";
@@ -73,6 +75,7 @@ export function PhoneCourses({
 	onLearn,
 	onOpenLesson,
 	onUpdate,
+	onLibrary,
 	onBackup,
 	onRestore,
 }: {
@@ -105,6 +108,8 @@ export function PhoneCourses({
 	onLearn?: (courseId: string, cardIds: string[]) => void;
 	onOpenLesson?: (chatId: string) => void;
 	onUpdate: () => void;
+	/** Open the list of the Mac's courses: which ones this phone holds. */
+	onLibrary?: () => void;
 	/** Hand the answers only this phone has to the share sheet. */
 	onBackup: () => void;
 	/** Read a backup file's answers in. */
@@ -115,6 +120,17 @@ export function PhoneCourses({
 			<header className="flex items-center gap-2 text-muted-foreground">
 				<GraduationCapIcon className="size-5" aria-hidden="true" />
 				<h1 className="flex-1 font-title text-2xl text-foreground">Learnbox 2.0</h1>
+				{onLibrary && (
+					<button
+						type="button"
+						onClick={onLibrary}
+						aria-label="Choose the courses on this phone"
+						className="flex size-11 items-center justify-center rounded-full active:bg-accent"
+						data-testid="phone-library-open"
+					>
+						<FolderIcon className="size-5" />
+					</button>
+				)}
 				<button
 					type="button"
 					onClick={onUpdate}
@@ -199,14 +215,46 @@ export function PhoneCourses({
 	);
 }
 
-/** The first run: nothing on the phone yet; the cards come from the Mac. */
-export function PhoneSetup({ updating, error, onStart }: { updating: PullProgress | null; error: string | null; onStart: () => void }) {
+/**
+ * The first run: nothing on the phone yet; the cards come from the Mac. With the Mac's list of courses at hand, which
+ * ones come is the learner's choice (all ticked to begin with); without it, everything comes.
+ */
+export function PhoneSetup({
+	updating,
+	error,
+	catalog = null,
+	onStart,
+}: {
+	updating: PullProgress | null;
+	error: string | null;
+	/** The Mac's courses, once the phone has asked (null: not known). */
+	catalog?: readonly PhoneCatalogEntry[] | null;
+	/** `courseIds`: the ones ticked; absent when the phone has no list to choose from. */
+	onStart: (courseIds?: string[]) => void;
+}) {
+	// null: the learner has not touched a box yet, so every course is ticked
+	const [touched, setTouched] = useState<ReadonlySet<string> | null>(null);
+	const selected = touched ?? new Set((catalog ?? []).map((e) => e.id));
+	const toggle = (id: string) =>
+		setTouched(() => {
+			const next = new Set(selected);
+			if (!next.delete(id)) next.add(id);
+			return next;
+		});
+	const ids = (catalog ?? []).filter((e) => selected.has(e.id)).map((e) => e.id);
+	const choosing = catalog !== null && catalog.length > 0;
 	return (
 		<main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center gap-4 px-4 py-10" data-testid="phone-setup">
 			<h1 className="font-title text-2xl">Learnbox 2.0</h1>
 			<p className="text-sm text-muted-foreground">
 				This phone is paired. Get your cards from the Mac (Tailscale on, the Mac awake with Learnbox open) — after that you can study anywhere, with or without a connection.
 			</p>
+			{choosing && (
+				<>
+					<p className="text-sm text-muted-foreground">Which courses should this phone keep? You can change this later.</p>
+					<PhoneCourseChoice entries={catalog} selected={selected} onToggle={toggle} disabled={updating !== null} />
+				</>
+			)}
 			{error && (
 				<p className="rounded-md border border-red-500/40 p-3 text-sm text-red-400" role="alert" data-testid="phone-error">
 					{error}
@@ -214,8 +262,8 @@ export function PhoneSetup({ updating, error, onStart }: { updating: PullProgres
 			)}
 			<button
 				type="button"
-				onClick={onStart}
-				disabled={updating !== null}
+				onClick={() => onStart(choosing ? ids : undefined)}
+				disabled={updating !== null || (choosing && ids.length === 0)}
 				className="flex h-14 items-center justify-center gap-2 rounded-xl bg-foreground text-base font-medium text-background disabled:opacity-60"
 				data-testid="phone-get-cards"
 			>

@@ -148,6 +148,16 @@ describe("the phone API", () => {
 		assert.equal(seen[0]!.headers.authorization, undefined, "the phone's key stops at the gateway");
 	});
 
+	it("carries the phone's course choice and the catalog request through", async () => {
+		const token = await pairPhone();
+		const deck = await call("GET", "/api/phone/deck?reviewsFrom=0&courses=a,b", { headers: auth(token) });
+		assert.equal(deck.json().url, "/api/phone/deck?reviewsFrom=0&courses=a,b");
+		const catalog = await call("GET", "/api/phone/catalog", { headers: auth(token) });
+		assert.equal(catalog.status, 200);
+		assert.equal((await call("GET", "/api/phone/catalog")).status, 401, "no key, no catalog");
+		assert.equal((await call("POST", "/api/phone/catalog", { headers: auth(token) })).status, 404);
+	});
+
 	it("carries a POST body through", async () => {
 		const token = await pairPhone();
 		const body = JSON.stringify({ reviews: [{ cardId: "c1", at: "2026-11-05T09:00:00.000Z", grade: 3 }] });

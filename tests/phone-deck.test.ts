@@ -12,10 +12,10 @@ import { after, describe, it } from "node:test";
 import { PHONE_DECK_SCHEMA } from "../src/core/contracts/mobile.ts";
 import type { StudyCard, StudyCourse, StudyReview } from "../src/core/contracts/study.ts";
 import { createMemoryStudyStore, type StudyChange } from "../src/core/memory-study-store.ts";
-import { buildPhoneDeck, newReviews, readPhoneDeck, reviewKey } from "../src/core/phone-deck.ts";
+import { buildPhoneCatalog, buildPhoneDeck, newReviews, phoneCatalogOf, readCourseIds, readPhoneCatalog, readPhoneDeck, reviewKey } from "../src/core/phone-deck.ts";
 import { studyAnswer, studyCardAction, studyCourses, studyNext, studyUndo } from "../src/core/study-engine.ts";
 import { mediaNamesOf } from "../src/core/study-render.ts";
-import { phoneDeck, phoneMedia } from "../src/server/phone-deck.ts";
+import { phoneCatalog, phoneDeck, phoneMedia } from "../src/server/phone-deck.ts";
 import { createStudyStore } from "../src/store/study.ts";
 
 const NOW = new Date(2026, 10, 4, 10, 0, 0);
@@ -131,6 +131,83 @@ describe("cutting a deck", () => {
 	});
 });
 
+describe("cutting a deck for the courses a phone chose", () => {
+	const store = () =>
+		createMemoryStudyStore({
+			courses: [course("k1", "Anatomy"), course("k2", "Biology"), course("k3", "Empty")],
+			cards: [
+				card("1", { fields: { Front: '<img src="a.png"><img src="shared.png">', Back: "b" } }),
+				card("2", { fields: { Front: '<img src="shared.png">', Back: "b" } }),
+				card("3", { courseId: "k2", fields: { Front: '<img src="b.png"><img src="shared.png">', Back: "[sound:s.mp3]" } }),
+			],
+			reviews: [review("1", "2026-11-01T09:00:00.000Z"), review("3", "2026-11-02T09:00:00.000Z"), review("2", "2026-11-03T09:00:00.000Z"), review("3", "2026-11-04T09:00:00.000Z")],
+		});
+	const sizes: Record<string, number> = { "a.png": 10, "b.png": 20, "s.mp3": 30, "shared.png": 5 };
+	const size = (n: string) => sizes[n] ?? null;
+
+	it("holds only the chosen courses, their cards, the review lines of those cards and the media they use", () => {
+		const deck = buildPhoneDeck(store(), size, 0, NOW, ["k2"]);
+		assert.deepEqual(deck.courses.map((c) => c.id), ["k2"]);
+		assert.deepEqual(deck.cards.map((c) => c.id), ["3"]);
+		assert.deepEqual(deck.reviews.map((r) => r.cardId), ["3", "3"]);
+		assert.deepEqual(deck.media.map((m) => m.name), ["b.png", "s.mp3", "shared.png"]);
+	});
+
+	it("keeps the ledger position whole: the phone asks from the end of the ledger next time, whatever it chose", () => {
+		const deck = buildPhoneDeck(store(), size, 2, NOW, ["k1"]);
+		assert.deepEqual([deck.reviewsFrom, deck.reviewsTotal], [2, 4]);
+		assert.deepEqual(deck.reviews.map((r) => r.cardId), ["2"], "from line 2 on, only the lines of the chosen cards");
+	});
+
+	it("is everything when no choice is named, and nothing at all for an empty choice", () => {
+		assert.equal(buildPhoneDeck(store(), size, 0, NOW).cards.length, 3);
+		assert.equal(buildPhoneDeck(store(), size, 0, NOW, ["k1", "k2", "k3"]).cards.length, 3);
+		const none = buildPhoneDeck(store(), size, 0, NOW, []);
+		assert.deepEqual([none.courses, none.cards, none.reviews, none.media], [[], [], [], []]);
+		assert.equal(buildPhoneDeck(store(), size, 0, NOW, ["gone"]).cards.length, 0, "an id the Mac does not know picks nothing");
+	});
+
+	it("always carries the catalog of every course, chosen or not", () => {
+		const deck = buildPhoneDeck(store(), size, 0, NOW, ["k2"]);
+		assert.deepEqual(deck.catalog?.map((c) => c.id), ["k1", "k2", "k3"]);
+		assert.deepEqual(deck.catalog, buildPhoneCatalog(store(), size));
+	});
+
+	it("tells what a course would put on the phone: its cards, and its media counted once", () => {
+		const list = buildPhoneCatalog(store(), size);
+		assert.deepEqual(list.map((c) => [c.id, c.name, c.cards, c.mediaBytes]), [["k1", "Anatomy", 2, 15], ["k2", "Biology", 1, 55], ["k3", "Empty", 0, 0]]);
+		assert.deepEqual(phoneCatalogOf(store(), size), { v: PHONE_DECK_SCHEMA, courses: list });
+	});
+
+	it("leaves out the size of media that is not on the Mac", () => {
+		const list = buildPhoneCatalog(store(), (n) => (n === "a.png" ? 10 : null));
+		assert.deepEqual(list.map((c) => c.mediaBytes), [10, 0, 0]);
+	});
+
+	it("reads the course list off an address: absent is all, empty is none, a list that cannot be one is null", () => {
+		assert.equal(readCourseIds(null), undefined);
+		assert.deepEqual(readCourseIds(""), []);
+		assert.deepEqual(readCourseIds("a"), ["a"]);
+		assert.deepEqual(readCourseIds("a,b,a"), ["a", "b"], "a name twice is once");
+		for (const bad of ["a,", ",a", "a,,b", "x".repeat(121), Array.from({ length: 201 }, (_, i) => `c${i}`).join(",")]) assert.equal(readCourseIds(bad), null, bad.slice(0, 20));
+		assert.equal(readCourseIds(Array.from({ length: 200 }, (_, i) => `c${i}`).join(","))?.length, 200);
+	});
+
+	it("reads a catalog back, and refuses one with the wrong shape", () => {
+		const deck = buildPhoneDeck(store(), size, 0, NOW);
+		assert.deepEqual(readPhoneDeck(JSON.parse(JSON.stringify(deck)))?.catalog, deck.catalog);
+		const old: Partial<typeof deck> = { ...deck };
+		delete old.catalog;
+		assert.ok(readPhoneDeck(old), "decks cut before the catalog existed still read");
+		for (const catalog of ["x", [{ id: "k" }], [{ id: "k", name: "n", cards: "1", mediaBytes: 0 }], [{ id: "k", name: "n", cards: 1, mediaBytes: Number.NaN }], [null]]) {
+			assert.equal(readPhoneDeck({ ...deck, catalog }), null, JSON.stringify(catalog));
+		}
+		const wire = JSON.parse(JSON.stringify(phoneCatalogOf(store(), size))) as unknown;
+		assert.equal(readPhoneCatalog(wire)?.length, 3);
+		for (const raw of [null, {}, { v: 2, courses: [] }, { v: PHONE_DECK_SCHEMA, courses: "no" }, { v: PHONE_DECK_SCHEMA, courses: [{ id: 1 }] }]) assert.equal(readPhoneCatalog(raw), null, JSON.stringify(raw));
+	});
+});
+
 describe("the Mac side: ledgers and media on disk", () => {
 	const root = fs.mkdtempSync(path.join(os.tmpdir(), "phone-deck-"));
 	after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -157,6 +234,17 @@ describe("the Mac side: ledgers and media on disk", () => {
 		const file = phoneMedia("arm.png", deps)!;
 		assert.equal(file.mime, "image/png");
 		assert.deepEqual([...file.bytes], [0x89, 0x50, 0x4e, 0x47]);
+	});
+
+	it("cuts a deck for chosen courses and lists the catalog, from the real files", () => {
+		const deps = setup();
+		deps.store.upsertCourse(course("k2", "Second"));
+		deps.store.upsertCards([card("2", { courseId: "k2", fields: { Front: "no media", Back: "b" } })]);
+		const only = phoneDeck(0, NOW, deps, ["k2"]);
+		assert.deepEqual([only.courses.map((c) => c.id), only.cards.map((c) => c.id), only.media, only.reviews], [["k2"], ["2"], [], []]);
+		assert.equal(only.reviewsTotal, 1, "the whole ledger's length");
+		assert.deepEqual(phoneCatalog(deps).courses.map((c) => [c.id, c.cards, c.mediaBytes]), [["k1", 1, 4], ["k2", 1, 0]]);
+		assert.deepEqual(phoneDeck(0, NOW, deps, []).cards, []);
 	});
 
 	it("serves nothing for names that point outside, hidden files, other types or missing files", () => {

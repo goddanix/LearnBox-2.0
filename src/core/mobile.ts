@@ -126,6 +126,7 @@ export type MobileRouteClass = "public" | "device" | "deny";
  */
 const DEVICE_ROUTES: readonly { method: string; path: string }[] = [
 	{ method: "GET", path: "/api/phone/deck" },
+	{ method: "GET", path: "/api/phone/catalog" },
 	{ method: "POST", path: "/api/phone/sync" },
 	{ method: "POST", path: "/api/phone/lesson" },
 	{ method: "GET", path: "/api/phone/lessons" },

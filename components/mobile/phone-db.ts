@@ -9,7 +9,7 @@
  */
 
 import { newOps, newReviews, opKey, reviewKey } from "@/src/core";
-import type { PhoneCardOp, StudyCard, StudyCourse, StudyReview } from "@/src/core";
+import type { PhoneCardOp, PhoneCatalogEntry, StudyCard, StudyCourse, StudyReview } from "@/src/core";
 
 /** What the phone remembers about its copy. */
 export interface PhoneMeta {
@@ -20,6 +20,15 @@ export interface PhoneMeta {
 	syncedAt: string;
 	/** How many lines of the Mac's review ledger the phone has taken in. */
 	macReviews: number;
+	/** The courses the learner chose to hold here (Slice 10g). Absent on a phone that took everything before the choice existed. */
+	courses?: string[];
+	/** Every course on the Mac as of the last update: the list the choice is made from (absent before Slice 10g). */
+	catalog?: PhoneCatalogEntry[];
+}
+
+/** The ids of the courses this phone holds: the learner's choice, or — for a phone from before the choice existed — all it has. */
+export function heldCourseIds(snap: Pick<PhoneSnapshot, "meta" | "courses">): string[] {
+	return snap.meta.courses ?? snap.courses.map((c) => c.id);
 }
 
 /** One review line the phone holds: `sent` is false for an answer given here that the Mac does not have yet. */
@@ -52,7 +61,11 @@ export interface PhoneMediaFile {
 export interface PhoneDb {
 	/** Everything but the media, or null when no deck has been taken in yet. */
 	load(): Promise<PhoneSnapshot | null>;
-	/** Replace the courses and cards, add the Mac's new review lines, set the meta — all or nothing. Card changes the Mac has are let go. */
+	/**
+	 * Replace the courses and cards, add the Mac's new review lines, set the meta — all or nothing. Card changes the Mac
+	 * has are let go, and so are the review lines of cards that are no longer in the deck (a course the learner took off
+	 * the phone) — except answers the Mac does not have yet, which stay.
+	 */
 	applyDeck(input: { meta: PhoneMeta; courses: readonly StudyCourse[]; cards: readonly StudyCard[]; macReviews: readonly StudyReview[] }): Promise<void>;
 	/** Answers given on the phone, kept until the Mac has them. */
 	addReviews(reviews: readonly StudyReview[]): Promise<void>;
@@ -89,10 +102,12 @@ export function createMemoryPhoneDb(): PhoneDb {
 	return {
 		load: async () => (meta ? { meta, courses: [...courses], cards: [...cards], reviews: [...reviews], ops: [...ops] } : null),
 		applyDeck: async (input) => {
+			const held = new Set(input.cards.map((c) => c.id));
 			meta = input.meta;
 			courses = [...input.courses];
 			cards = [...input.cards];
-			reviews.push(...input.macReviews.map((review): ReviewRow => ({ review, src: "mac", sent: true })));
+			reviews = reviews.filter((r) => !r.sent || held.has(r.review.cardId));
+			reviews.push(...input.macReviews.filter((r) => held.has(r.cardId)).map((review): ReviewRow => ({ review, src: "mac", sent: true })));
 			ops = ops.filter((o) => !o.sent);
 		},
 		addReviews: async (batch) => {
@@ -193,11 +208,20 @@ function wrap(db: IDBDatabase): PhoneDb {
 				if ((cursor.value as OpRow).sent) cursor.delete();
 				cursor.continue();
 			};
+			// answers of cards that left the phone go with them (the Mac has them); answers it does not have yet stay
+			const held = new Set(cards.map((c) => c.id));
+			tx.objectStore("reviews").openCursor().onsuccess = (event) => {
+				const cursor = (event.target as IDBRequest<IDBCursorWithValue | null>).result;
+				if (!cursor) return;
+				const row = cursor.value as ReviewRow;
+				if (row.sent && !held.has(row.review.cardId)) cursor.delete();
+				cursor.continue();
+			};
 			tx.objectStore("courses").clear();
 			tx.objectStore("cards").clear();
 			for (const c of courses) tx.objectStore("courses").put(c);
 			for (const c of cards) tx.objectStore("cards").put(c);
-			for (const review of macReviews) tx.objectStore("reviews").add({ review, src: "mac", sent: true } satisfies ReviewRow);
+			for (const review of macReviews) if (held.has(review.cardId)) tx.objectStore("reviews").add({ review, src: "mac", sent: true } satisfies ReviewRow);
 			tx.objectStore("meta").put(meta, META_KEY);
 			await done_;
 		},
