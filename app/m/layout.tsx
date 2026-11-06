@@ -2,11 +2,11 @@ import type { Metadata, Viewport } from "next";
 
 /** The phone app's frame (Learnbox 2.0, Slice 10): a full-screen page, no desktop chrome (see components/mobile/shell-switch.tsx). */
 export const metadata: Metadata = {
-	title: "Learnbox",
-	description: "Learnbox on your phone",
+	title: "Learnbox 2.0",
+	description: "Learnbox 2.0 on your phone",
 	manifest: "/m/manifest.webmanifest",
 	icons: { apple: "/m/apple-touch-icon.png", icon: "/m/icon-192.png" },
-	appleWebApp: { capable: true, title: "Learnbox", statusBarStyle: "black-translucent" },
+	appleWebApp: { capable: true, title: "Learnbox 2.0", statusBarStyle: "black-translucent" },
 	// no phone-number / address auto-links inside cards
 	formatDetection: { telephone: false, address: false, email: false },
 };

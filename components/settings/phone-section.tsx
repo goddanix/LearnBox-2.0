@@ -199,7 +199,7 @@ export function PhoneSection() {
 							{offer.pairUrl ? (
 								<ol className="mt-1 list-decimal pl-4 text-xs text-muted-foreground">
 									<li>Scan the QR code with the iPhone's camera and open the link in Safari.</li>
-									<li>Share → Add to Home Screen, then open the Learnbox icon.</li>
+									<li>Share → Add to Home Screen, then open the Learnbox 2.0 icon.</li>
 									<li>Type the code above when the app asks for it.</li>
 								</ol>
 							) : (

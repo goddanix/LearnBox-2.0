@@ -93,7 +93,7 @@ export function PhoneCourses({
 		<main className="mx-auto flex min-h-dvh w-full max-w-xl flex-col gap-3 px-4 pb-10 pt-4" data-testid="phone-courses">
 			<header className="flex items-center gap-2 text-muted-foreground">
 				<GraduationCapIcon className="size-5" aria-hidden="true" />
-				<h1 className="flex-1 font-title text-2xl text-foreground">Learnbox</h1>
+				<h1 className="flex-1 font-title text-2xl text-foreground">Learnbox 2.0</h1>
 				<button
 					type="button"
 					onClick={onUpdate}
@@ -171,7 +171,7 @@ export function PhoneCourses({
 export function PhoneSetup({ updating, error, onStart }: { updating: PullProgress | null; error: string | null; onStart: () => void }) {
 	return (
 		<main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center gap-4 px-4 py-10" data-testid="phone-setup">
-			<h1 className="font-title text-2xl">Learnbox</h1>
+			<h1 className="font-title text-2xl">Learnbox 2.0</h1>
 			<p className="text-sm text-muted-foreground">
 				This phone is paired. Get your cards from the Mac (Tailscale on, the Mac awake with Learnbox open) — after that you can study anywhere, with or without a connection.
 			</p>

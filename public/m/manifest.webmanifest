@@ -1,6 +1,6 @@
 {
-  "name": "Learnbox",
-  "short_name": "Learnbox",
+  "name": "Learnbox 2.0",
+  "short_name": "Learnbox 2.0",
   "description": "Study your cards on the phone, with or without your Mac.",
   "start_url": "/m",
   "scope": "/m",

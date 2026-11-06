@@ -46,7 +46,7 @@ export function PairForm({ initialCode = "" }: { initialCode?: string }) {
 				void submit();
 			}}
 		>
-			<h1 className="font-title text-2xl">Learnbox</h1>
+			<h1 className="font-title text-2xl">Learnbox 2.0</h1>
 			<p className="text-sm text-muted-foreground">
 				Pair this phone with your Mac. On the Mac, open Settings → Phone → Show code, then type the code here.
 			</p>
