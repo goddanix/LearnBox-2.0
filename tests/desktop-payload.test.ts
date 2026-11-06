@@ -74,8 +74,8 @@ describe("desktop standalone payload", () => {
 		});
 	});
 
-	it("still refuses leaked developer data or keys", () => {
-		for (const leaked of ["data/chat.json", "auth.json", ".env", ".env.local"]) {
+	it("still refuses leaked developer keys", () => {
+		for (const leaked of ["auth.json", ".env", ".env.local"]) {
 			withPayload(({ write, run }) => {
 				write(path.join(STANDALONE, leaked));
 				const result = run();
@@ -83,6 +83,27 @@ describe("desktop standalone payload", () => {
 				assert.match(String(result.stderr), /REFUSING/);
 			});
 		}
+	});
+
+	it("drops the data/ copy the instrumentation trace makes, and refuses when a route's own trace lists the repo's data/", () => {
+		const listing = (up: number) => JSON.stringify({ version: 1, files: [`${"../".repeat(up)}data/chat.json`] });
+		// only instrumentation.ts (the phone gateway's resume) lists data/: Next copies it into the standalone, nothing ships it on purpose
+		withPayload(({ root, write, run }) => {
+			write(path.join(STANDALONE, "data", "chat.json"));
+			write(path.join(".next", "server", "instrumentation.js.nft.json"), listing(2));
+			const result = run();
+			assert.equal(result.status, 0, String(result.stderr));
+			assert.equal(fs.existsSync(path.join(root, STANDALONE, "data")), false, "the copy is removed");
+			assert.match(String(result.stdout), /removed data\/ copied by the instrumentation trace/);
+		});
+		// a route's trace that lists the repo's data/ is a real leak: the build stops
+		withPayload(({ write, run }) => {
+			write(path.join(STANDALONE, "data", "chat.json"));
+			write(path.join(".next", "server", "app", "api", "x", "route.js.nft.json"), listing(5));
+			const result = run();
+			assert.equal(result.status, 1);
+			assert.match(String(result.stderr), /REFUSING: .*route\.js\.nft\.json lists the repo's data\//);
+		});
 	});
 
 	it("still refuses a missing runtime prompt asset", () => {

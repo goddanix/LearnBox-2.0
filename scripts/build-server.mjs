@@ -49,7 +49,7 @@ if (exists(path.join(ROOT, "public"))) {
 const leakedData = path.join(STANDALONE, "data");
 const repoData = path.join(ROOT, "data");
 const traceFiles = (dir) =>
-	fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+	(exists(dir) ? fs.readdirSync(dir, { withFileTypes: true }) : []).flatMap((entry) => {
 		const full = path.join(dir, entry.name);
 		if (entry.isDirectory()) return traceFiles(full);
 		return entry.name.endsWith(".nft.json") ? [full] : [];
@@ -57,7 +57,7 @@ const traceFiles = (dir) =>
 const nextDir = path.join(ROOT, ".next");
 const traces = [
 	...traceFiles(path.join(nextDir, "server")),
-	...fs.readdirSync(nextDir).filter((name) => name.endsWith(".nft.json")).map((name) => path.join(nextDir, name)),
+	...(exists(nextDir) ? fs.readdirSync(nextDir) : []).filter((name) => name.endsWith(".nft.json")).map((name) => path.join(nextDir, name)),
 ];
 for (const trace of traces) {
 	if (path.basename(trace) === "instrumentation.js.nft.json") continue;
