@@ -28,6 +28,8 @@ function load(network: (req: Request) => Promise<Response>) {
 		};
 	};
 	const fetched: string[] = [];
+	/** The waits the worker asked for; they run short here so a test does not sit through the real ones. */
+	const delays: number[] = [];
 	const self = {
 		location: { origin: ORIGIN },
 		addEventListener: (type: string, fn: Listener) => listeners.set(type, fn),
@@ -46,6 +48,11 @@ function load(network: (req: Request) => Promise<Response>) {
 		Response,
 		URL,
 		console,
+		setTimeout: (fn: () => void, ms: number) => {
+			delays.push(ms);
+			return setTimeout(fn, Math.min(ms, 25));
+		},
+		clearTimeout,
 	});
 
 	/** A GET (or other) request the way the browser raises it; the answer is what the worker responds with, or "ignored". */
@@ -53,7 +60,7 @@ function load(network: (req: Request) => Promise<Response>) {
 		const request = new Request(ORIGIN + url, { method: init.method ?? "GET" });
 		Object.defineProperty(request, "mode", { value: init.mode ?? "no-cors" });
 		let answer: Promise<Response> | undefined;
-		listeners.get("fetch")!({ request, respondWith: (p: Promise<Response>) => (answer = p) });
+		listeners.get("fetch")!({ request, respondWith: (p: Promise<Response>) => (answer = p), waitUntil: (p: Promise<unknown>) => void p.catch(() => {}) });
 		return answer ? answer : "ignored";
 	}
 	async function message(data: unknown) {
@@ -61,7 +68,7 @@ function load(network: (req: Request) => Promise<Response>) {
 		listeners.get("message")!({ data, waitUntil: (p: Promise<void>) => (work = p) });
 		await work;
 	}
-	return { ask, message, stores, fetched, listeners };
+	return { ask, message, stores, fetched, listeners, delays };
 }
 
 const html = (text: string) => new Response(text, { headers: { "content-type": "text/html" } });
@@ -136,6 +143,33 @@ describe("pages", () => {
 		await sw.ask("/m/pair?code=ABCD2345", { mode: "navigate" });
 		const keys = [...[...sw.stores.values()][0]!.keys()];
 		assert.deepEqual(keys, [`${ORIGIN}/m/pair`]);
+	});
+
+	it("show the kept copy when the Mac does not answer within a few seconds, and refresh it when it does", async () => {
+		let slow = false;
+		let release: () => void = () => {};
+		const sw = load(async () => {
+			if (!slow) return html("old app");
+			await new Promise<void>((resolve) => (release = resolve));
+			return html("new app");
+		});
+		await sw.ask("/m", { mode: "navigate" });
+		slow = true;
+		assert.equal(await text(await sw.ask("/m", { mode: "navigate" })), "old app", "the app starts from the kept copy");
+		assert.ok(sw.delays.includes(3000), "it waits three seconds for the Mac, no longer");
+		release();
+		await new Promise((r) => setTimeout(r, 30));
+		const cached = [...sw.stores.values()][0]!.get(`${ORIGIN}/m`);
+		assert.equal(await cached?.clone().text(), "new app", "the copy was refreshed by the late answer");
+	});
+
+	it("wait for the Mac as long as it takes when nothing is kept yet", async () => {
+		let release: () => void = () => {};
+		const sw = load(() => new Promise<Response>((resolve) => (release = () => resolve(html("the app")))));
+		const pending = sw.ask("/m", { mode: "navigate" }).then(text);
+		await new Promise((r) => setTimeout(r, 60));
+		release();
+		assert.equal(await pending, "the app");
 	});
 
 	it("fail when there is neither a connection nor a kept copy", async () => {

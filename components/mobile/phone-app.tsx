@@ -5,7 +5,8 @@ import { useRouter } from "next/navigation";
 import type { PhoneLesson, StudyCourseSummary, StudyLinkCard } from "@/src/core";
 import { buildPhoneBackup, cardChangesText } from "@/src/core";
 import { keepAppForOffline } from "./offline-shell";
-import { getPhoneToken, phoneFetch } from "./phone-auth";
+import { getPhoneToken, phoneFetch, restorePhoneToken } from "./phone-auth";
+import { dismissInstallHint, installHintDismissed, isStandalone } from "./phone-install-hint";
 import { readBackupFile, saveBackupFile } from "./phone-backup";
 import { PhoneCourses, PhoneSetup } from "./phone-courses";
 import { PhoneApiError } from "./phone-http";
@@ -15,6 +16,7 @@ import { listPhoneLessons, startPhoneLesson } from "./phone-lessons";
 import { formatPhoneHash, parsePhoneHash } from "./phone-route";
 import type { PhoneRoute } from "./phone-route";
 import { PhoneSession } from "./phone-session";
+import { usePhoneStorage } from "./phone-storage";
 import { openPhoneSource } from "./phone-source";
 import type { PhoneSource, UpdateResult } from "./phone-source";
 import type { PullProgress } from "./pull-deck";
@@ -83,6 +85,9 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 	const [updated, setUpdated] = useState<string | null>(null);
 	const [notice, setNotice] = useState<string | null>(null);
 	const online = useOnline();
+	const storage = usePhoneStorage();
+	/** Safari only, until dismissed: the nudge to make the home-screen icon from this page. */
+	const [installHint, setInstallHint] = useState(false);
 	/** Each course's weak spots (the phone's own answers) and lessons (asked of the Mac while online). */
 	const [weak, setWeak] = useState<Record<string, StudyLinkCard[]>>({});
 	const [lessons, setLessons] = useState<Record<string, PhoneLesson[]>>({});
@@ -119,43 +124,53 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 	}, []);
 
 	useEffect(() => {
-		if (!getPhoneToken()) {
-			router.replace("/m/pair");
-			return;
-		}
-		setRoute(readRoute());
-		setReady(true);
 		let live = true;
-		open().then(
-			(s) => {
-				if (!live) return;
-				sourceRef.current = s;
-				setSource(s);
-				void loadCourses();
-			},
-			(e: unknown) => live && setFatal(e instanceof Error ? e.message : "This browser cannot keep cards on the phone."),
-		);
-		// which phone this is, when the Mac can be asked; offline there is nothing to show
-		void phoneFetch("/m-api/me")
-			.then(async (res) => {
-				if (res.ok && live) setDeviceName(((await res.json()) as { device: { name: string } }).device.name);
-			})
-			.catch(() => {});
-		const onHash = () => setRoute(readRoute());
-		// coming back to the app (the phone was locked, another app was in front): the day may have turned
-		const onVisible = () => {
-			if (document.visibilityState === "visible" && readRoute().kind === "courses") void loadCourses();
-		};
-		window.addEventListener("hashchange", onHash);
-		window.addEventListener("popstate", onHash);
-		document.addEventListener("visibilitychange", onVisible);
-		// the app's own files are kept for offline starts (production builds only: a dev server's files change on every edit)
-		if (process.env.NODE_ENV === "production") void keepAppForOffline();
+		let undo = () => {};
+		void (async () => {
+			// the key may have gone from one of the two places it is kept in; the other puts it back
+			const token = getPhoneToken() ?? (await restorePhoneToken());
+			if (!live) return;
+			if (!token) {
+				router.replace("/m/pair");
+				return;
+			}
+			setRoute(readRoute());
+			setReady(true);
+			setInstallHint(!isStandalone() && !installHintDismissed());
+			open().then(
+				(s) => {
+					if (!live) return;
+					sourceRef.current = s;
+					setSource(s);
+					void loadCourses();
+				},
+				(e: unknown) => live && setFatal(e instanceof Error ? e.message : "This browser cannot keep cards on the phone."),
+			);
+			// which phone this is, when the Mac can be asked; offline there is nothing to show
+			void phoneFetch("/m-api/me")
+				.then(async (res) => {
+					if (res.ok && live) setDeviceName(((await res.json()) as { device: { name: string } }).device.name);
+				})
+				.catch(() => {});
+			const onHash = () => setRoute(readRoute());
+			// coming back to the app (the phone was locked, another app was in front): the day may have turned
+			const onVisible = () => {
+				if (document.visibilityState === "visible" && readRoute().kind === "courses") void loadCourses();
+			};
+			window.addEventListener("hashchange", onHash);
+			window.addEventListener("popstate", onHash);
+			document.addEventListener("visibilitychange", onVisible);
+			// the app's own files are kept for offline starts (production builds only: a dev server's files change on every edit)
+			if (process.env.NODE_ENV === "production") void keepAppForOffline();
+			undo = () => {
+				window.removeEventListener("hashchange", onHash);
+				window.removeEventListener("popstate", onHash);
+				document.removeEventListener("visibilitychange", onVisible);
+			};
+		})();
 		return () => {
 			live = false;
-			window.removeEventListener("hashchange", onHash);
-			window.removeEventListener("popstate", onHash);
-			document.removeEventListener("visibilitychange", onVisible);
+			undo();
 		};
 	}, [router, open, loadCourses]);
 
@@ -343,6 +358,12 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 			error={error}
 			deviceName={deviceName}
 			syncedAt={engine.meta.syncedAt}
+			storage={storage}
+			installHint={installHint}
+			onDismissInstallHint={() => {
+				dismissInstallHint();
+				setInstallHint(false);
+			}}
 			unsent={engine.unsent()}
 			unsentOps={engine.unsentOps().length}
 			updating={updating}

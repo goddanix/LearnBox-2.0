@@ -4,6 +4,8 @@ import { DownloadIcon, GraduationCapIcon, RefreshCwIcon } from "lucide-react";
 import { describeUnsent } from "@/src/core";
 import type { PhoneLesson, StudyCourseSummary, StudyLinkCard, StudyQueueCounts } from "@/src/core";
 import { PhoneLessonList, PhoneWeakSpots } from "./phone-course-extras";
+import { formatBytes } from "./phone-storage";
+import type { PhoneStorageStatus } from "./phone-storage";
 import type { PullProgress } from "./pull-deck";
 
 /** new · learning · due, the same colours as on the Mac, but big enough to read at a glance. */
@@ -39,12 +41,26 @@ export function progressText(p: PullProgress): string {
 	return p.total === 0 ? "Pictures are up to date." : `Getting pictures… ${p.done} / ${p.total}`;
 }
 
+/** One line on what this phone holds and whether iOS may take it away. */
+export function storageLine(courses: StudyCourseSummary[] | null, storage: PhoneStorageStatus | null): string {
+	const cards = (courses ?? []).reduce((sum, c) => sum + c.total, 0);
+	const held = `On this phone: ${cards} card${cards === 1 ? "" : "s"}${courses ? ` in ${courses.length} course${courses.length === 1 ? "" : "s"}` : ""}`;
+	const size = storage?.usage !== undefined ? ` (${formatBytes(storage.usage)})` : "";
+	if (!storage) return `${held}.`;
+	if (storage.persistent === true) return `${held}${size}. Storage is kept safe.`;
+	if (storage.persistent === false) return `${held}${size}. iOS may clear this storage.`;
+	return `${held}${size}.`;
+}
+
 /** The phone's start page: which course? */
 export function PhoneCourses({
 	courses,
 	error,
 	deviceName,
 	syncedAt,
+	storage = null,
+	installHint = false,
+	onDismissInstallHint,
 	unsent,
 	unsentOps = 0,
 	updating,
@@ -65,6 +81,11 @@ export function PhoneCourses({
 	deviceName?: string | null;
 	/** When the Mac's deck was last taken in. */
 	syncedAt: string;
+	/** Whether the browser promised to keep this phone's copy (null until it has been asked). */
+	storage?: PhoneStorageStatus | null;
+	/** Safari only: nudge to make the home-screen icon from this page. */
+	installHint?: boolean;
+	onDismissInstallHint?: () => void;
 	/** Answers given here that the Mac does not have yet. */
 	unsent: number;
 	/** Card changes (pause, bury, edit) made here that the Mac does not have yet. */
@@ -110,6 +131,16 @@ export function PhoneCourses({
 					{error}
 				</p>
 			)}
+			{installHint && (
+				<div className="flex items-start gap-3 rounded-md border p-3 text-sm text-muted-foreground" data-testid="phone-install-hint">
+					<p className="flex-1">
+						Make the home-screen icon from <em>this</em> page: Share → Add to Home Screen. Pair once more when the icon opens (an installed app keeps its own storage).
+					</p>
+					<button type="button" onClick={onDismissInstallHint} className="h-9 shrink-0 rounded-md border px-3 text-foreground active:bg-accent" data-testid="phone-install-hint-dismiss">
+						Got it
+					</button>
+				</div>
+			)}
 			{courses === null && !error && <p className="text-sm text-muted-foreground">Loading…</p>}
 			{courses?.length === 0 && (
 				<p className="rounded-md border p-4 text-sm text-muted-foreground" data-testid="phone-empty">
@@ -139,6 +170,7 @@ export function PhoneCourses({
 			<p className="flex flex-col gap-0.5 text-xs text-muted-foreground" data-testid="phone-sync">
 				<span>{updating ? progressText(updating) : `Cards from your Mac: ${ago(syncedAt)}.`}</span>
 				{updated && !updating && <span data-testid="phone-updated">{updated}</span>}
+				<span data-testid="phone-storage">{storageLine(courses, storage)}</span>
 				{unsent + unsentOps > 0 && <span data-testid="phone-unsent">{describeUnsent(unsent, unsentOps)} only on this phone so far.</span>}
 				{notice && <span data-testid="phone-notice">{notice}</span>}
 			</p>

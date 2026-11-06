@@ -6,11 +6,14 @@
  * own storage), not to this file, and nothing private is ever put in this cache.
  *
  *   page loads   network first (a new version of the app arrives as soon as the Mac answers), the last good copy
- *                when it does not — keyed by path, so a pairing link's code is not stored
+ *                when it does not answer within a few seconds — keyed by path, so a pairing link's code is not stored.
+ *                A Mac that is asleep or off the tailnet makes a request hang for a minute; the app must not.
  *   scripts etc  cache first (their names change with every build); other shell files: kept copy now, fresh one next time
  *   the page can ask for files to be kept (message {type: "keep", urls}), so the very first visit is covered too
  */
 const CACHE = "learnbox-shell-v1";
+/** How long a page waits for the Mac before the kept copy is shown (the request goes on and refreshes the copy). */
+const NETWORK_WAIT_MS = 3000;
 
 function inShell(url) {
 	if (url.origin !== self.location.origin) return false;
@@ -33,19 +36,36 @@ self.addEventListener("activate", (event) => {
 	);
 });
 
-async function page(request, url) {
+async function page(request, url, event) {
 	const cache = await caches.open(CACHE);
+	const kept = async () => (await cache.match(pageKey(url))) || (await cache.match(url.origin + "/m"));
+	const network = fetch(request).then(async (res) => {
+		if (res.ok) await cache.put(pageKey(url), res.clone());
+		return res;
+	});
+	let timer;
+	const late = new Promise((resolve) => {
+		timer = setTimeout(() => resolve(null), NETWORK_WAIT_MS);
+	});
 	try {
-		const res = await fetch(request);
-		if (res.ok) {
-			await cache.put(pageKey(url), res.clone());
-			return res;
+		const res = await Promise.race([network, late]);
+		clearTimeout(timer);
+		if (res === null) {
+			// no answer yet: the kept copy now, and the request carries on to refresh it
+			const copy = await kept();
+			if (copy) {
+				if (event && event.waitUntil) event.waitUntil(network.catch(() => {}));
+				return copy;
+			}
+			return await network;
 		}
+		if (res.ok) return res;
 		// the Mac's server is down (the gateway answers 502): a kept copy is better than its error
-		return (await cache.match(pageKey(url))) || (await cache.match(url.origin + "/m")) || res;
+		return (await kept()) || res;
 	} catch (e) {
-		const kept = (await cache.match(pageKey(url))) || (await cache.match(url.origin + "/m"));
-		if (kept) return kept;
+		clearTimeout(timer);
+		const copy = await kept();
+		if (copy) return copy;
 		throw e;
 	}
 }
@@ -73,7 +93,7 @@ self.addEventListener("fetch", (event) => {
 	if (!inShell(url)) return;
 	if (request.mode === "navigate") {
 		if (url.pathname !== "/m" && !url.pathname.startsWith("/m/")) return;
-		event.respondWith(page(request, url));
+		event.respondWith(page(request, url, event));
 		return;
 	}
 	// a client-side navigation asks for page data (?_rsc=…); that is not a file to keep

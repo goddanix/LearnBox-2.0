@@ -1,14 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { normalizePairingCode } from "@/src/core";
-import { setPhoneToken } from "./phone-auth";
+import { phoneFetch, restorePhoneToken, setPhoneToken } from "./phone-auth";
 
 /**
  * Pairing, on the phone: the eight-character code shown on the Mac (the QR code only carries it to this page) and a
  * name for this phone. The code is used here, inside the app the learner will keep using, so the key lands in this
  * app's own storage — Safari and an installed web app do not share any.
+ *
+ * A phone that is paired already never sees the form: the home-screen icon may well open this address (iOS keeps the
+ * page the icon was made from), and asking for a code again there would unpair the phone in the learner's eyes.
  */
 export function PairForm({ initialCode = "" }: { initialCode?: string }) {
 	const router = useRouter();
@@ -16,6 +19,32 @@ export function PairForm({ initialCode = "" }: { initialCode?: string }) {
 	const [name, setName] = useState("iPhone");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	/** Looking for a key this phone already has, before anything is asked of the learner. */
+	const [checking, setChecking] = useState(true);
+
+	useEffect(() => {
+		let live = true;
+		void (async () => {
+			if (!(await restorePhoneToken())) {
+				if (live) setChecking(false);
+				return;
+			}
+			try {
+				// the Mac is asked only to see whether the key was locked; no answer at all is no reason to ask for a code
+				const res = await phoneFetch("/m-api/me");
+				if (res.status === 401) {
+					if (live) setChecking(false);
+					return;
+				}
+			} catch {
+				/* the Mac cannot be reached: the key stands */
+			}
+			if (live) router.replace("/m");
+		})();
+		return () => {
+			live = false;
+		};
+	}, [router]);
 
 	async function submit() {
 		const normalized = normalizePairingCode(code);
@@ -36,6 +65,8 @@ export function PairForm({ initialCode = "" }: { initialCode?: string }) {
 			setBusy(false);
 		}
 	}
+
+	if (checking) return <p className="px-4 py-10 text-sm text-muted-foreground" data-testid="pair-checking">Loading…</p>;
 
 	return (
 		<form
