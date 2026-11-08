@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PhoneCatalogEntry, PhoneLesson, PhoneTopicChoice, StudyCourseSummary, StudyLinkCard } from "@/src/core";
-import { buildPhoneBackup, cardChangesText } from "@/src/core";
+import { buildPhoneBackup, cardChangesText, topicsHeld } from "@/src/core";
 import { keepAppForOffline } from "./offline-shell";
 import { getPhoneToken, phoneFetch, restorePhoneToken } from "./phone-auth";
 import { dismissInstallHint, installHintDismissed, isStandalone } from "./phone-install-hint";
@@ -254,7 +254,10 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 		setStarting(true);
 		setStartError(null);
 		try {
-			const chatId = await startPhoneLesson({ courseId: route.courseId, cardIds: route.cardIds, text });
+			// a course held in part: the lesson is about the subdecks that are on this phone
+			const held = sourceRef.current?.engine?.meta.topics;
+			const topics = held ? topicsHeld(held, route.courseId) : null;
+			const chatId = await startPhoneLesson({ courseId: route.courseId, cardIds: route.cardIds, ...(topics ? { topics } : {}), text });
 			setFirst({ chatId, text });
 			navigate({ kind: "lesson", chatId }, true);
 		} catch (e) {

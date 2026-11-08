@@ -23,6 +23,7 @@ import { nativeInputCause, type LhMarkerMessage } from "../src/core/native-messa
 import { groupReviews } from "../src/core/study-queue.ts";
 import {
 	buildStudyContext,
+	cleanSubdecks,
 	linkCard,
 	newStudyContextMessage,
 	plainText,
@@ -185,6 +186,24 @@ describe("the study-context marker", () => {
 		assert.match(at("2026-12-01", true), /Topics: A \(only these topics count\)/);
 	});
 
+	it("names the subdecks a lesson is limited to (Slice 10h), the nameless one as 'no subdeck', and says nothing without them", () => {
+		const limited = data({ subdecks: ["W1 Head", ""] });
+		assert.deepEqual(limited.subdecks, ["W1 Head", ""]);
+		assert.match(studyContextText(limited), /^Subdecks in this lesson: W1 Head; no subdeck\.$/m);
+		assert.ok(studyContextText(limited).indexOf("Topics: Arm; Leg") < studyContextText(limited).indexOf("Subdecks in this lesson"), "after the course's topics");
+		for (const none of [data(), data({ subdecks: [] })]) {
+			assert.equal("subdecks" in none, false);
+			assert.ok(!studyContextText(none).includes("Subdecks in this lesson"));
+		}
+	});
+
+	it("reads the subdecks of a request: strings only, once each, in order — anything else limits nothing", () => {
+		assert.deepEqual(cleanSubdecks(["W2", "W1", "W2", "", 3, null, {}]), ["W2", "W1", ""]);
+		for (const bad of [undefined, null, "W1", { 0: "W1" }, 7, Array.from({ length: 501 }, (_, i) => `t${i}`)]) assert.deepEqual(cleanSubdecks(bad), [], String(bad).slice(0, 20));
+		assert.equal(cleanSubdecks(Array.from({ length: 500 }, (_, i) => `t${i}`)).length, 500);
+		assert.deepEqual(cleanSubdecks(["x".repeat(301), "ok"]), ["ok"], "a name that long is not a subdeck");
+	});
+
 	it("is a custom message that is neutral input, projected as a data card, and never learner speech", () => {
 		const d = data();
 		const marker = newStudyContextMessage(d);
@@ -282,6 +301,41 @@ describe("the server functions", () => {
 	});
 });
 
+describe("a lesson limited to subdecks (Slice 10h)", () => {
+	const later = new Date(2027, 5, 1, 10, 0, 0); // long after the reviews: every reviewed card is due
+	beforeEach(() => {
+		const s = stores.stores.studyStore;
+		s.upsertCards([card("two", { topic: "W1" }), card("three", { topic: "W2" }), card("one"), card("new1", { topic: "W1" })]);
+	});
+
+	it("takes the state and the weak cards from those subdecks only, and says which they are", () => {
+		const whole = service.studyContextFor({ courseId: "anat" }, later);
+		assert.deepEqual(whole.weak.map((c) => c.id), ["three", "two"]);
+		assert.equal(whole.subdecks, undefined);
+		const w1 = service.studyContextFor({ courseId: "anat", topics: ["W1"] }, later);
+		assert.deepEqual(w1.subdecks, ["W1"]);
+		assert.deepEqual(w1.weak.map((c) => c.id), ["two"], "three is of W2");
+		assert.equal(w1.due, 1, "only two of W1 was reviewed");
+		assert.equal(w1.newToday, 1, "new1 of W1");
+		const rest = service.studyContextFor({ courseId: "anat", topics: ["W2", ""] }, later);
+		assert.deepEqual(rest.weak.map((c) => c.id), ["three"]);
+		assert.deepEqual([rest.due, rest.newToday], [2, 0], "three and one, both reviewed; the nameless subdeck is the cards without a topic");
+	});
+
+	it("picks cards from the ledger as before — a picked card of another subdeck is still picked", () => {
+		const picked = service.studyContextFor({ courseId: "anat", cardIds: ["three"], topics: ["W1"] }, later);
+		assert.deepEqual(picked.cards.map((c) => c.id), ["three"]);
+		assert.deepEqual(picked.weak.map((c) => c.id), ["two"]);
+		assert.deepEqual(service.studyContextFor({ courseId: "bio", topics: ["W1"] }, later).weak, [], "the list names subdecks of the course asked for: Biology's only card has none");
+		assert.deepEqual(service.studyContextFor({ courseId: "bio", topics: [""] }, later).weak.map((c) => c.id), ["bio1"]);
+	});
+
+	it("ignores something that is not a list", () => {
+		assert.equal(service.studyContextFor({ courseId: "anat", topics: "W1" }, later).subdecks, undefined);
+		assert.deepEqual(service.studyContextFor({ courseId: "anat", topics: [] }, later).weak.map((c) => c.id), ["three", "two"]);
+	});
+});
+
 describe("opening a named card", () => {
 	// A course of cards that were never reviewed: any of them can be shown, and none has a history
 	// that depends on the clock.
@@ -337,6 +391,14 @@ describe("the routes", () => {
 		const marker = chat.messages[0] as LhMarkerMessage;
 		assert.match(marker.content, /\[three\] Front: Front three \| Back: Back three \| 3 lapses/);
 		assert.equal(stores.stores.chatStore.listChats().find((c) => c.id === id)?.courseId, "anat", "the list carries the course");
+	});
+
+	it("starts a lesson limited to subdecks: the marker leads with them (Slice 10h)", async () => {
+		stores.stores.studyStore.upsertCards([card("two", { topic: "W1" })]);
+		const { id } = (await (await post({ title: "Arm", study: { courseId: "anat", topics: ["W1"] } })).json()) as { id: string };
+		const marker = stores.stores.chatStore.getChat(id)!.messages[0] as LhMarkerMessage;
+		assert.match(marker.content, /^Subdecks in this lesson: W1\.$/m);
+		assert.deepEqual((marker.details as StudyContextData).subdecks, ["W1"]);
 	});
 
 	it("starts a lesson for a course alone", async () => {

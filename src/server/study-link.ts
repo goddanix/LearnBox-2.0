@@ -10,7 +10,8 @@
 import type { StudyContextData, StudyLinkCard, StudyWeakSpots } from "../core/contracts/study-link.ts";
 import { LESSON_CARDS_MAX } from "../core/contracts/study-link.ts";
 import { buildQueue, clockAt, groupReviews } from "../core/study-queue.ts";
-import { buildStudyContext, lapsesOf, linkCard, weakSpots } from "../core/study-link.ts";
+import { topicNameOf } from "../core/phone-deck.ts";
+import { buildStudyContext, cleanSubdecks, lapsesOf, linkCard, weakSpots } from "../core/study-link.ts";
 import { defaultStudyDeps, StudyInputError, type StudyDeps } from "./study.ts";
 
 function requireCourse(courseId: string, deps: StudyDeps) {
@@ -58,17 +59,21 @@ export function studyLinkCards(
 
 /**
  * The marker data for a lesson for `courseId`, optionally from the cards `cardIds`: the course
- * (name, topics, exam day), its state today, its weak spots, and the picked cards' text.
+ * (name, topics, exam day), its state today, its weak spots, and the picked cards' text. With `topics` the lesson
+ * is limited to those subdecks (a phone that holds the course in part): the state and the weak spots come from their
+ * cards only, and the marker says which subdecks they are.
  */
 export function studyContextFor(
-	input: { courseId: string; cardIds?: unknown },
+	input: { courseId: string; cardIds?: unknown; topics?: unknown },
 	now: Date = new Date(),
 	deps: StudyDeps = defaultStudyDeps(),
 ): StudyContextData {
 	const course = requireCourse(input.courseId, deps);
 	const picked = studyLinkCards(course.id, input.cardIds, now, deps);
 	const clock = clockAt(now);
-	const cards = deps.store.readCards();
+	const subdecks = cleanSubdecks(input.topics);
+	const held = new Set(subdecks);
+	const cards = deps.store.readCards().filter((c) => subdecks.length === 0 || c.courseId !== course.id || held.has(topicNameOf(c)));
 	const reviews = groupReviews(deps.store.readReviews());
 	const queue = buildQueue(course, cards, reviews, clock);
 	return buildStudyContext({
@@ -78,5 +83,6 @@ export function studyContextFor(
 		newToday: queue.counts.new,
 		weakAll: weakSpots(course, cards, reviews, clock.today),
 		picked,
+		subdecks,
 	});
 }

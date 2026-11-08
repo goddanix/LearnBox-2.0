@@ -141,6 +141,8 @@ export function buildStudyContext(input: {
 	/** The whole weak list (the picked ones are left out of what the teacher hears). */
 	weakAll: readonly StudyLinkCard[];
 	picked: readonly StudyLinkCard[];
+	/** The subdecks the lesson is limited to (absent: the whole course). */
+	subdecks?: readonly string[];
 }): StudyContextData {
 	const { course } = input;
 	const pickedIds = new Set(input.picked.map((c) => c.id));
@@ -158,7 +160,18 @@ export function buildStudyContext(input: {
 		newToday: input.newToday,
 		weak: input.weakAll.filter((c) => !pickedIds.has(c.id)).slice(0, CONTEXT_WEAK_LIMIT),
 		cards: [...input.picked],
+		...(input.subdecks && input.subdecks.length > 0 ? { subdecks: [...input.subdecks] } : {}),
 	};
+}
+
+/** Most subdecks one lesson may name, and the longest name (a course has a few dozen; the caps bound what a request can carry). */
+const MAX_SUBDECKS = 500;
+const MAX_SUBDECK_NAME = 300;
+
+/** The subdecks a request names: strings only, once each, in order; the empty name is the cards without a topic. Not a list, or too much of it: none. */
+export function cleanSubdecks(raw: unknown): string[] {
+	if (!Array.isArray(raw) || raw.length > MAX_SUBDECKS) return [];
+	return [...new Set(raw.filter((n): n is string => typeof n === "string" && n.length <= MAX_SUBDECK_NAME))];
 }
 
 const noun = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
@@ -181,6 +194,7 @@ export function studyContextText(d: StudyContextData): string {
 		`Course: ${c.name} — ${examLine(c)}`,
 	];
 	if (c.topics.length > 0) lines.push(`Topics: ${c.topics.join("; ")}${c.strictTopics ? " (only these topics count)" : ""}`);
+	if (d.subdecks && d.subdecks.length > 0) lines.push(`Subdecks in this lesson: ${d.subdecks.map((n) => n || "no subdeck").join("; ")}.`);
 	lines.push(`Study state: ${noun(d.due, "card", "cards")} due, ${d.newToday} new today.`);
 	if (d.weak.length > 0) {
 		lines.push("Weakest cards of the course (most lapses):", ...d.weak.map((w) => `- "${w.front}" (${noun(w.lapses, "lapse", "lapses")})`));

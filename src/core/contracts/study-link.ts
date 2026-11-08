@@ -40,6 +40,8 @@ export interface StudyContextData {
 	weak: StudyLinkCard[];
 	/** The cards the learner started this lesson from (empty: started for the course only). */
 	cards: StudyLinkCard[];
+	/** The subdecks (topics) the lesson is limited to when it starts from a phone that holds only some of the course's subdecks; the empty name stands for the cards that have none. The state and the weak cards above come from these only. */
+	subdecks?: string[];
 }
 
 /** GET /api/study/weak?course=… — the course's weak-spot list. */
@@ -52,6 +54,8 @@ export interface StudyWeakSpots {
 export interface StudyLessonStart {
 	courseId: string;
 	cardIds?: string[];
+	/** Limit the lesson to these subdecks of the course (a phone that holds the course in part). */
+	topics?: string[];
 }
 
 /** A card needs this many lapses to count as a weak spot. */

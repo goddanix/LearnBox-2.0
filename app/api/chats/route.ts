@@ -28,11 +28,11 @@ export async function POST(req: Request) {
 	// The study course (and the flashcards) a lesson starts for (Learnbox 2.0, Slice 9): the
 	// request names ids, the context is read from the ledgers BEFORE the record exists, so a
 	// stale course or card is a 4xx and never an orphan session. Teach sessions only.
-	const studyRequest = !kind && typeof body.study === "object" && body.study !== null ? (body.study as { courseId?: unknown; cardIds?: unknown }) : undefined;
+	const studyRequest = !kind && typeof body.study === "object" && body.study !== null ? (body.study as { courseId?: unknown; cardIds?: unknown; topics?: unknown }) : undefined;
 	let study: StudyContextData | undefined;
 	if (studyRequest) {
 		try {
-			study = studyContextFor({ courseId: typeof studyRequest.courseId === "string" ? studyRequest.courseId : "", cardIds: studyRequest.cardIds });
+			study = studyContextFor({ courseId: typeof studyRequest.courseId === "string" ? studyRequest.courseId : "", cardIds: studyRequest.cardIds, topics: studyRequest.topics });
 		} catch (err) {
 			if (err instanceof StudyInputError) return Response.json({ error: err.message }, { status: err.status });
 			throw err;

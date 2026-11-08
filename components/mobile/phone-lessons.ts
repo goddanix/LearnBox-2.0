@@ -8,9 +8,12 @@ import type { PhoneLesson } from "@/src/core";
 import { phoneFetch } from "./phone-auth";
 import { jsonInit, phoneJson } from "./phone-http";
 
-/** Start a lesson for a course, optionally from cards; `text` is the learner's first message and names the lesson. Returns the chat id. */
-export async function startPhoneLesson(input: { courseId: string; cardIds?: readonly string[]; text: string }): Promise<string> {
-	const out = await phoneJson<{ id: string }>("/api/phone/lesson", jsonInit({ courseId: input.courseId, cardIds: input.cardIds, title: input.text }));
+/**
+ * Start a lesson for a course, optionally from cards; `text` is the learner's first message and names the lesson.
+ * `topics` limits the lesson to the subdecks the phone holds of a course it holds in part. Returns the chat id.
+ */
+export async function startPhoneLesson(input: { courseId: string; cardIds?: readonly string[]; topics?: readonly string[]; text: string }): Promise<string> {
+	const out = await phoneJson<{ id: string }>("/api/phone/lesson", jsonInit({ courseId: input.courseId, cardIds: input.cardIds, topics: input.topics, title: input.text }));
 	return out.id;
 }
 

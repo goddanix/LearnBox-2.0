@@ -63,6 +63,11 @@ export function StudyContextCard({ data }: { data: StudyContextData }) {
 							{course.strictTopics ? " (only these topics count)" : ""}
 						</div>
 					)}
+					{data.subdecks && data.subdecks.length > 0 && (
+						<div data-testid="study-context-subdecks" className="leading-relaxed text-muted-foreground">
+							Subdecks in this lesson: {data.subdecks.map((n) => n || "no subdeck").join("; ")}
+						</div>
+					)}
 					{cards.length > 0 && (
 						<div className="space-y-1">
 							<div className="font-medium text-foreground/80">Cards this lesson started from</div>

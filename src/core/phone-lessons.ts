@@ -7,6 +7,7 @@
 import type { ChatListItem } from "./contracts/chat.ts";
 import type { PhoneLesson } from "./contracts/mobile.ts";
 import type { StudyLessonStart } from "./contracts/study-link.ts";
+import { cleanSubdecks } from "./study-link.ts";
 
 /** A chat id as the Mac makes them (`chat_<time>_<random>`); the gateway lets nothing else into a lesson address. */
 export const PHONE_LESSON_ID = /^[A-Za-z0-9_-]{1,80}$/;
@@ -44,5 +45,6 @@ export function parsePhoneLessonStart(raw: unknown): { title: string; study: Stu
 	const title = typeof r.title === "string" ? r.title.trim() : "";
 	if (!courseId || !title) return null;
 	const cardIds = Array.isArray(r.cardIds) ? r.cardIds.filter((id): id is string => typeof id === "string" && id.length > 0) : [];
-	return { title, study: { courseId, ...(cardIds.length > 0 ? { cardIds } : {}) } };
+	const topics = cleanSubdecks(r.topics);
+	return { title, study: { courseId, ...(cardIds.length > 0 ? { cardIds } : {}), ...(topics.length > 0 ? { topics } : {}) } };
 }

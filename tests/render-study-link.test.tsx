@@ -93,6 +93,18 @@ describe("the study-context card", () => {
 		assert.equal($("study-context-body"), null, "a second click closes it again");
 	});
 
+	it("names the subdecks a lesson is limited to (Slice 10h), and shows no line for a whole course", async () => {
+		await mount(<StudyContextCard data={data({ subdecks: ["W1 Head", ""] })} />);
+		await act(async () => $("study-context-toggle")!.click());
+		assert.equal($("study-context-subdecks")!.textContent, "Subdecks in this lesson: W1 Head; no subdeck");
+		await act(async () => $("study-context-toggle")!.click());
+		await act(async () => root!.unmount());
+		host?.remove();
+		await mount(<StudyContextCard data={data()} />);
+		await act(async () => $("study-context-toggle")!.click());
+		assert.equal($("study-context-subdecks"), null);
+	});
+
 	it("says what is missing instead of leaving gaps: no exam, no cards, a passed or a same-day exam", () => {
 		const html = (d: StudyContextData) => renderToStaticMarkup(<StudyContextCard data={d} />);
 		const bare = html(data({ course: { id: "a", name: "Bio", topics: [], daysToExam: null }, cards: [], weak: [] }));

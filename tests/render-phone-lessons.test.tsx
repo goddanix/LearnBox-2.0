@@ -93,19 +93,19 @@ function api(over: Partial<PhoneStudyApi> = {}): PhoneStudyApi {
 		...over,
 	};
 }
-const sourceOf = (a: PhoneStudyApi): PhoneSource => ({
-	engine: { api: a, meta: META, unsent: () => 0, unsentReviews: () => [], unsentOps: () => [] },
+const sourceOf = (a: PhoneStudyApi, meta: typeof META & { topics?: Record<string, string[]> } = META): PhoneSource => ({
+	engine: { api: a, meta, unsent: () => 0, unsentReviews: () => [], unsentOps: () => [] },
 	update: async () => { throw new Error("no update expected"); },
 	restore: async () => { throw new Error("no restore expected"); },
 		saveCards: async () => null,
 		loadCards: async () => { throw new Error("no cards file expected"); },
 });
-async function mount(a: PhoneStudyApi) {
+async function mount(a: PhoneStudyApi, meta?: Parameters<typeof sourceOf>[1]) {
 	const router = { push: () => {}, replace: () => {}, back: () => {}, forward: () => {}, refresh: () => {}, prefetch: () => {} };
 	host = document.createElement("div");
 	document.body.append(host);
 	root = createRoot(host);
-	await act(async () => root!.render(<AppRouterContext.Provider value={router as never}><PhoneApp open={async () => sourceOf(a)} /></AppRouterContext.Provider>));
+	await act(async () => root!.render(<AppRouterContext.Provider value={router as never}><PhoneApp open={async () => sourceOf(a, meta)} /></AppRouterContext.Provider>));
 	await settle();
 }
 
@@ -256,6 +256,31 @@ describe("starting a lesson", () => {
 		const send = calls.find((c) => c.url === "/api/phone/lesson/chat_new/send");
 		assert.deepEqual(send?.body, { input: { type: "text", text: "Why does it run there?" } });
 		assert.equal(calls.filter((c) => c.url === "/api/phone/lesson/chat_new/send").length, 1, "once");
+	});
+
+	it("limits the lesson to the subdecks of a course the phone holds in part (Slice 10h) — and says nothing of subdecks for a course held whole", async () => {
+		const table = {
+			...ME,
+			"POST /api/phone/lesson": () => Response.json({ id: "chat_new", title: "x" }),
+			"GET /api/phone/lesson/chat_new": () => Response.json(record("chat_new", [])),
+			"POST /api/phone/lesson/chat_new/send": () => Response.json({ ok: true }),
+			"GET /api/phone/lesson/chat_new/stream": () => sse({ type: "turn-settled" }, "[DONE]"),
+		};
+		mac(table);
+		await mount(api(), { ...META, topics: { a: ["W1 Head", ""] } });
+		await toStart();
+		await type($("phone-lesson-start-text"), "Why?");
+		await click($("phone-lesson-start-go"));
+		assert.deepEqual(calls.find((c) => c.url === "/api/phone/lesson")?.body, { courseId: "a", cardIds: ["w1"], topics: ["W1 Head", ""], title: "Why?" });
+		await act(async () => root!.unmount());
+		host?.remove();
+		calls.length = 0;
+		mac(table);
+		await mount(api(), { ...META, topics: { other: ["x"] } });
+		await toStart();
+		await type($("phone-lesson-start-text"), "Why?");
+		await click($("phone-lesson-start-go"));
+		assert.deepEqual(calls.find((c) => c.url === "/api/phone/lesson")?.body, { courseId: "a", cardIds: ["w1"], title: "Why?" }, "a course not held in part sends no subdecks");
 	});
 
 	it("says what went wrong and stays at the start when the Mac refuses", async () => {

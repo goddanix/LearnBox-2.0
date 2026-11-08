@@ -64,6 +64,23 @@ describe("POST /api/phone/lesson", () => {
 		assert.equal(chats.getChat(made.id)!.cardIds?.length ?? 0, 0);
 	});
 
+	it("limits the lesson to the subdecks the phone holds: the marker names them and counts only their cards (Slice 10h)", async () => {
+		const { studyStore } = await import("../src/store/study.ts");
+		studyStore.upsertCards([{ ...card("t1"), topic: "W1" }, { ...card("t2"), topic: "W2" }, card("t3")]);
+		const made = (await (await start.POST(post("/api/phone/lesson", { courseId: "k1", topics: ["W1", ""], title: "Only these" }))).json()) as { id: string };
+		const marker = chats.getChat(made.id)!.messages[0] as { customType?: string; content: string; details: { subdecks?: string[]; newToday: number } };
+		assert.equal(marker.customType, "study-context");
+		assert.deepEqual(marker.details.subdecks, ["W1", ""]);
+		assert.match(marker.content, /^Subdecks in this lesson: W1; no subdeck\.$/m);
+		assert.equal(marker.details.newToday, 4, "t1 and t3, and the untouched c1 and c2 (no subdeck) — not t2 of W2");
+		const plain = (await (await start.POST(post("/api/phone/lesson", { courseId: "k1", title: "All of it" }))).json()) as { id: string };
+		const all = chats.getChat(plain.id)!.messages[0] as { content: string; details: { subdecks?: string[] } };
+		assert.equal(all.details.subdecks, undefined);
+		assert.ok(!all.content.includes("Subdecks in this lesson"));
+		const junk = (await (await start.POST(post("/api/phone/lesson", { courseId: "k1", topics: "W1", title: "Not a list" }))).json()) as { id: string };
+		assert.equal((chats.getChat(junk.id)!.messages[0] as { details: { subdecks?: string[] } }).details.subdecks, undefined, "something that is not a list limits nothing");
+	});
+
 	it("refuses what is not a lesson start, and never makes any other kind of session", async () => {
 		for (const bad of [{}, { courseId: "k1" }, { title: "x" }, { courseId: "", title: "x" }, { courseId: "k1", title: "   " }, [], "not json {", null]) {
 			const res = await start.POST(post("/api/phone/lesson", bad));
