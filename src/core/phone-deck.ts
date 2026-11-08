@@ -5,7 +5,7 @@
  */
 
 import { PHONE_DECK_SCHEMA } from "./contracts/mobile.ts";
-import type { PhoneCatalog, PhoneCatalogEntry, PhoneDeck, PhoneMediaEntry } from "./contracts/mobile.ts";
+import type { PhoneCatalog, PhoneCatalogEntry, PhoneCatalogTopic, PhoneDeck, PhoneMediaEntry, PhoneTopicChoice } from "./contracts/mobile.ts";
 import type { StudyCard, StudyReview } from "./contracts/study.ts";
 import type { StudyStore } from "./ports.ts";
 import { mediaNamesOf } from "./study-render.ts";
@@ -42,6 +42,61 @@ export function readCourseIds(param: string | null): string[] | undefined | null
 	return [...new Set(ids)];
 }
 
+/** The subdeck name of a card: its topic, or the empty name for a card that has none. */
+export const topicNameOf = (card: Pick<StudyCard, "topic">): string => card.topic ?? "";
+
+/** Limits on a subdeck choice (a phone has a few dozen subdecks; the caps only bound the address and the storage). */
+const MAX_CHOICE_COURSES = 200;
+const MAX_CHOICE_NAMES = 2000;
+const MAX_TOPIC_NAME = 300;
+
+/** A subdeck choice read off the wire or out of the phone's storage: course id → distinct topic names. Anything else is null. */
+export function cleanTopicChoice(raw: unknown): PhoneTopicChoice | null {
+	if (!isRecord(raw)) return null;
+	const entries = Object.entries(raw);
+	if (entries.length > MAX_CHOICE_COURSES) return null;
+	const out = new Map<string, string[]>();
+	let names = 0;
+	for (const [id, list] of entries) {
+		if (id === "" || id.length > 120 || !Array.isArray(list)) return null;
+		if (!list.every((n) => typeof n === "string" && n.length <= MAX_TOPIC_NAME)) return null;
+		const distinct = [...new Set(list as string[])];
+		names += distinct.length;
+		if (names > MAX_CHOICE_NAMES) return null;
+		out.set(id, distinct);
+	}
+	return Object.fromEntries(out);
+}
+
+/**
+ * The `topics` query value of a deck request: the subdeck choice as JSON ({"course-id": ["W1", ""]}). Absent = every
+ * subdeck of every chosen course (`undefined`); a value that cannot be a choice is `null`.
+ */
+export function readTopicChoice(param: string | null): PhoneTopicChoice | undefined | null {
+	if (param === null) return undefined;
+	if (param.length > 200_000) return null;
+	try {
+		return cleanTopicChoice(JSON.parse(param) as unknown);
+	} catch {
+		return null;
+	}
+}
+
+/** The subdecks held of one course, or null when the course is held whole. */
+export function topicsHeld(choice: Readonly<PhoneTopicChoice> | undefined, courseId: string): readonly string[] | null {
+	if (!choice || !Object.prototype.hasOwnProperty.call(choice, courseId)) return null;
+	return choice[courseId] ?? null;
+}
+
+/** Is this card in the choice? A card of a course held whole is; of a course held in part, when its subdeck is listed. */
+function inChoice(card: StudyCard, choice: Readonly<PhoneTopicChoice> | undefined): boolean {
+	const held = topicsHeld(choice, card.courseId);
+	return held === null || held.includes(topicNameOf(card));
+}
+
+/** Subdeck names in the order the learner reads them: numbers as numbers ("W2" before "W10"), no subdeck last. */
+const byTopicName = (a: string, b: string): number => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }));
+
 /** Bytes of the media the given cards use, counting each file once. */
 function mediaBytes(cards: readonly StudyCard[], mediaSize: (name: string) => number | null): number {
 	const seen = new Set<string>();
@@ -61,7 +116,12 @@ export function buildPhoneCatalog(store: StudyStore, mediaSize: (name: string) =
 	const cards = store.readCards();
 	return store.readCourses().map((c) => {
 		const own = cards.filter((card) => card.courseId === c.id);
-		return { id: c.id, name: c.name, cards: own.length, mediaBytes: mediaBytes(own, mediaSize) };
+		const byTopic = new Map<string, StudyCard[]>();
+		for (const card of own) byTopic.set(topicNameOf(card), [...(byTopic.get(topicNameOf(card)) ?? []), card]);
+		const topics: PhoneCatalogTopic[] = [...byTopic.keys()]
+			.sort(byTopicName)
+			.map((name) => ({ name, cards: byTopic.get(name)!.length, mediaBytes: mediaBytes(byTopic.get(name)!, mediaSize) }));
+		return { id: c.id, name: c.name, cards: own.length, mediaBytes: mediaBytes(own, mediaSize), topics };
 	});
 }
 
@@ -70,7 +130,8 @@ export function buildPhoneCatalog(store: StudyStore, mediaSize: (name: string) =
  * at a missing file shows the same "missing" on the phone as on the Mac, so such names are left out). `reviewsFrom`
  * is how many ledger lines the phone already has. `courseIds` are the courses the phone chose (all when absent): the
  * deck holds only their cards, the review lines of those cards and the media they use; `reviewsTotal` stays the whole
- * ledger's length, because that is the position the phone asks from next time.
+ * ledger's length, because that is the position the phone asks from next time. `topicChoice` narrows a course to some of
+ * its subdecks (Slice 10h); a course it does not name comes whole.
  */
 export function buildPhoneDeck(
 	store: StudyStore,
@@ -78,9 +139,10 @@ export function buildPhoneDeck(
 	reviewsFrom: number,
 	now: Date,
 	courseIds?: readonly string[],
+	topicChoice?: Readonly<PhoneTopicChoice>,
 ): PhoneDeck {
 	const chosen = courseIds ? new Set(courseIds) : null;
-	const cards = store.readCards().filter((c) => !chosen || chosen.has(c.courseId));
+	const cards = store.readCards().filter((c) => (!chosen || chosen.has(c.courseId)) && inChoice(c, topicChoice));
 	const ids = new Set(cards.map((c) => c.id));
 	const all = store.readReviews();
 	const from = Number.isInteger(reviewsFrom) && reviewsFrom >= 0 && reviewsFrom <= all.length ? reviewsFrom : 0;
@@ -97,7 +159,7 @@ export function buildPhoneDeck(
 		courses: store.readCourses().filter((c) => !chosen || chosen.has(c.id)),
 		cards,
 		reviewsFrom: from,
-		reviews: chosen ? all.slice(from).filter((r) => ids.has(r.cardId)) : all.slice(from),
+		reviews: chosen || topicChoice ? all.slice(from).filter((r) => ids.has(r.cardId)) : all.slice(from),
 		reviewsTotal: all.length,
 		media,
 		catalog: buildPhoneCatalog(store, mediaSize),
@@ -116,7 +178,26 @@ export function readPhoneCatalogEntries(raw: unknown): PhoneCatalogEntry[] | nul
 	for (const e of raw) {
 		if (!isRecord(e) || typeof e.id !== "string" || typeof e.name !== "string") return null;
 		if (typeof e.cards !== "number" || !Number.isFinite(e.cards) || typeof e.mediaBytes !== "number" || !Number.isFinite(e.mediaBytes)) return null;
-		out.push({ id: e.id, name: e.name, cards: e.cards, mediaBytes: e.mediaBytes });
+		const entry: PhoneCatalogEntry = { id: e.id, name: e.name, cards: e.cards, mediaBytes: e.mediaBytes };
+		if (e.topics !== undefined) {
+			const topics = readCatalogTopics(e.topics);
+			if (!topics) return null;
+			entry.topics = topics;
+		}
+		out.push(entry);
+	}
+	return out;
+}
+
+function readCatalogTopics(raw: unknown): PhoneCatalogTopic[] | null {
+	if (!Array.isArray(raw)) return null;
+	const out: PhoneCatalogTopic[] = [];
+	const seen = new Set<string>();
+	for (const t of raw) {
+		if (!isRecord(t) || typeof t.name !== "string" || t.name.length > MAX_TOPIC_NAME || seen.has(t.name)) return null;
+		if (typeof t.cards !== "number" || !Number.isFinite(t.cards) || typeof t.mediaBytes !== "number" || !Number.isFinite(t.mediaBytes)) return null;
+		seen.add(t.name);
+		out.push({ name: t.name, cards: t.cards, mediaBytes: t.mediaBytes });
 	}
 	return out;
 }

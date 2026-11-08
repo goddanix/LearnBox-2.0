@@ -12,7 +12,7 @@ import { after, describe, it } from "node:test";
 import { PHONE_DECK_SCHEMA } from "../src/core/contracts/mobile.ts";
 import type { StudyCard, StudyCourse, StudyReview } from "../src/core/contracts/study.ts";
 import { createMemoryStudyStore, type StudyChange } from "../src/core/memory-study-store.ts";
-import { buildPhoneCatalog, buildPhoneDeck, newReviews, phoneCatalogOf, readCourseIds, readPhoneCatalog, readPhoneDeck, reviewKey } from "../src/core/phone-deck.ts";
+import { buildPhoneCatalog, buildPhoneDeck, newReviews, phoneCatalogOf, readCourseIds, readPhoneCatalog, readPhoneDeck, readTopicChoice, reviewKey, topicsHeld } from "../src/core/phone-deck.ts";
 import { studyAnswer, studyCardAction, studyCourses, studyNext, studyUndo } from "../src/core/study-engine.ts";
 import { mediaNamesOf } from "../src/core/study-render.ts";
 import { phoneCatalog, phoneDeck, phoneMedia } from "../src/server/phone-deck.ts";
@@ -205,6 +205,106 @@ describe("cutting a deck for the courses a phone chose", () => {
 		const wire = JSON.parse(JSON.stringify(phoneCatalogOf(store(), size))) as unknown;
 		assert.equal(readPhoneCatalog(wire)?.length, 3);
 		for (const raw of [null, {}, { v: 2, courses: [] }, { v: PHONE_DECK_SCHEMA, courses: "no" }, { v: PHONE_DECK_SCHEMA, courses: [{ id: 1 }] }]) assert.equal(readPhoneCatalog(raw), null, JSON.stringify(raw));
+	});
+});
+
+describe("cutting a deck for some subdecks of a course (Slice 10h)", () => {
+	const store = () =>
+		createMemoryStudyStore({
+			courses: [course("k1", "Anatomy"), course("k2", "Biology")],
+			cards: [
+				card("1", { topic: "W2 Arm", fields: { Front: '<img src="a.png"><img src="shared.png">', Back: "b" } }),
+				card("2", { topic: "W10 Leg", fields: { Front: '<img src="shared.png">', Back: "b" } }),
+				card("3", { topic: "W1 Head", fields: { Front: '<img src="h.png">', Back: "b" } }),
+				card("4", { fields: { Front: "loose", Back: "b" } }),
+				card("5", { courseId: "k2", topic: "W1 Cell", fields: { Front: "cell", Back: "b" } }),
+			],
+			reviews: [review("1", "2026-11-01T09:00:00.000Z"), review("2", "2026-11-02T09:00:00.000Z"), review("5", "2026-11-03T09:00:00.000Z"), review("3", "2026-11-04T09:00:00.000Z")],
+		});
+	const sizes: Record<string, number> = { "a.png": 10, "h.png": 20, "shared.png": 5 };
+	const size = (n: string) => sizes[n] ?? null;
+
+	it("lists the subdecks of every course with their cards and media, numbers read as numbers and no subdeck last", () => {
+		const k1 = buildPhoneCatalog(store(), size)[0]!;
+		assert.deepEqual(k1.topics, [
+			{ name: "W1 Head", cards: 1, mediaBytes: 20 },
+			{ name: "W2 Arm", cards: 1, mediaBytes: 15 },
+			{ name: "W10 Leg", cards: 1, mediaBytes: 5 },
+			{ name: "", cards: 1, mediaBytes: 0 },
+		]);
+		assert.equal(k1.cards, 4);
+		assert.equal(k1.mediaBytes, 35, "the course counts a shared file once, whatever the subdecks add up to");
+		assert.deepEqual(buildPhoneCatalog(store(), size)[1]!.topics, [{ name: "W1 Cell", cards: 1, mediaBytes: 0 }]);
+	});
+
+	it("holds only the listed subdecks of a course named in the choice, and every other course whole", () => {
+		const deck = buildPhoneDeck(store(), size, 0, NOW, undefined, { k1: ["W2 Arm", ""] });
+		assert.deepEqual(deck.cards.map((c) => c.id), ["1", "4", "5"]);
+		assert.deepEqual(deck.courses.map((c) => c.id), ["k1", "k2"], "a course held in part is still a course on the phone");
+		assert.deepEqual(deck.reviews.map((r) => r.cardId), ["1", "5"], "only the answers of the cards that are there");
+		assert.deepEqual(deck.media.map((m) => m.name), ["a.png", "shared.png"], "only the media those cards use");
+		assert.equal(deck.reviewsTotal, 4, "the ledger position stays the whole ledger's length");
+		assert.equal(deck.catalog?.[0]?.topics?.length, 4, "the catalog still lists every subdeck");
+	});
+
+	it("works together with a choice of courses, and an empty list holds no card of that course", () => {
+		const deck = buildPhoneDeck(store(), size, 0, NOW, ["k1"], { k1: ["W1 Head"], k2: ["W1 Cell"] });
+		assert.deepEqual(deck.cards.map((c) => c.id), ["3"], "k2 is not chosen, so its subdecks do not matter");
+		assert.deepEqual(buildPhoneDeck(store(), size, 0, NOW, ["k1"], { k1: [] }).cards, []);
+		assert.deepEqual(buildPhoneDeck(store(), size, 0, NOW, undefined, { gone: ["x"] }).cards.map((c) => c.id), ["1", "2", "3", "4", "5"], "a course the Mac does not know changes nothing");
+	});
+
+	it("names subdecks exactly: a card of another subdeck, or of none, is not in", () => {
+		assert.deepEqual(buildPhoneDeck(store(), size, 0, NOW, undefined, { k1: ["W1"] }).cards.map((c) => c.id), ["5"], "W1 is not W1 Head");
+		assert.deepEqual(buildPhoneDeck(store(), size, 0, NOW, undefined, { k1: ["w2 arm"] }).cards.map((c) => c.id), ["5"], "and case counts");
+	});
+
+	it("ignores no key of the choice because of what it is called", () => {
+		const choice = JSON.parse('{"__proto__": ["x"], "constructor": ["W1 Head"]}') as Record<string, string[]>;
+		const deck = buildPhoneDeck(store(), size, 0, NOW, undefined, choice);
+		assert.deepEqual(deck.cards.map((c) => c.id), ["1", "2", "3", "4", "5"], "no course has such an id, and none is held in part by a prototype key");
+	});
+
+	it("reads the choice off an address: absent is all, a list of lists is a choice, anything else is null", () => {
+		assert.equal(readTopicChoice(null), undefined);
+		assert.deepEqual(readTopicChoice("{}"), {});
+		assert.deepEqual(readTopicChoice(JSON.stringify({ k1: ["a", "", "a"], k2: [] })), { k1: ["a", ""], k2: [] }, "a name twice is once, the empty name is a name");
+		for (const bad of ["", "nope", "[]", "null", '"x"', '{"k1":"a"}', '{"k1":[1]}', '{"":["a"]}', JSON.stringify({ k: ["x".repeat(301)] }), JSON.stringify({ ["k".repeat(121)]: [] })]) {
+			assert.equal(readTopicChoice(bad), null, bad.slice(0, 30));
+		}
+		assert.equal(readTopicChoice(JSON.stringify(Object.fromEntries(Array.from({ length: 201 }, (_, i) => [`c${i}`, []])))), null, "too many courses");
+		assert.equal(readTopicChoice(JSON.stringify({ k: Array.from({ length: 2001 }, (_, i) => `t${i}`) })), null, "too many names");
+		assert.equal(readTopicChoice(JSON.stringify({ k: Array.from({ length: 2000 }, (_, i) => `t${i}`) }))?.k?.length, 2000);
+	});
+
+	it("tells whether a course is held in part", () => {
+		assert.equal(topicsHeld(undefined, "k1"), null);
+		assert.equal(topicsHeld({ k2: ["a"] }, "k1"), null);
+		assert.deepEqual(topicsHeld({ k1: ["a"] }, "k1"), ["a"]);
+		assert.equal(topicsHeld(JSON.parse('{"__proto__": ["x"]}') as Record<string, string[]>, "k1"), null);
+	});
+
+	it("reads a catalog with subdecks back, refuses one with a broken subdeck, and still reads one cut before subdecks existed", () => {
+		const deck = buildPhoneDeck(store(), size, 0, NOW);
+		assert.deepEqual(readPhoneDeck(JSON.parse(JSON.stringify(deck)))?.catalog, deck.catalog);
+		const entry = { id: "k", name: "n", cards: 1, mediaBytes: 0 };
+		assert.ok(readPhoneCatalog({ v: PHONE_DECK_SCHEMA, courses: [entry] }), "no topics field");
+		for (const topics of ["x", [null], [{ name: 1, cards: 1, mediaBytes: 0 }], [{ name: "a", cards: "1", mediaBytes: 0 }], [{ name: "a", cards: 1, mediaBytes: Number.NaN }], [{ name: "a", cards: 1, mediaBytes: 0 }, { name: "a", cards: 1, mediaBytes: 0 }]]) {
+			assert.equal(readPhoneCatalog({ v: PHONE_DECK_SCHEMA, courses: [{ ...entry, topics }] }), null, JSON.stringify(topics));
+		}
+	});
+
+	it("cuts from the real files, with the subdecks listed in the catalog", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "phone-topics-"));
+		after(() => fs.rmSync(dir, { recursive: true, force: true }));
+		const real = createStudyStore({ courses: path.join(dir, "courses.jsonl"), cards: path.join(dir, "cards.jsonl"), reviews: path.join(dir, "reviews.jsonl") });
+		const mediaDir = path.join(dir, "media");
+		fs.mkdirSync(mediaDir);
+		real.upsertCourse(course("k1"));
+		real.upsertCards([card("1", { topic: "A" }), card("2", { topic: "B" })]);
+		const deps = { store: real, mediaDir } as unknown as Parameters<typeof phoneDeck>[2];
+		assert.deepEqual(phoneDeck(0, NOW, deps, undefined, { k1: ["B"] }).cards.map((c) => c.id), ["2"]);
+		assert.deepEqual(phoneCatalog(deps).courses[0]!.topics?.map((t) => t.name), ["A", "B"]);
 	});
 });
 

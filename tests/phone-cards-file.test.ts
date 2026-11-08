@@ -122,10 +122,11 @@ describe("what is not a cards file", () => {
 			return new Blob([out]);
 		};
 		const good = header();
-		for (const bad of ["{", "[]", "null", JSON.stringify({ ...good, v: 2 }), JSON.stringify({ ...good, kind: "other" }), JSON.stringify({ ...good, cards: "no" }), JSON.stringify({ ...good, courses: [{ id: 1 }] }), JSON.stringify({ ...good, macReviews: -1 })]) {
+		for (const bad of ["{", "[]", "null", JSON.stringify({ ...good, v: 2 }), JSON.stringify({ ...good, kind: "other" }), JSON.stringify({ ...good, cards: "no" }), JSON.stringify({ ...good, courses: [{ id: 1 }] }), JSON.stringify({ ...good, macReviews: -1 }), JSON.stringify({ ...good, topics: "no" }), JSON.stringify({ ...good, topics: { k1: "W1" } }), JSON.stringify({ ...good, topics: { k1: [1] } })]) {
 			assert.equal(await reason(prefix(bad)), "damaged", bad.slice(0, 40));
 		}
 		assert.equal(await reason(prefix(JSON.stringify(good))), "ok");
+		assert.equal(await reason(prefix(JSON.stringify({ ...good, topics: { k1: ["W1", ""] } }))), "ok", "a subdeck choice (Slice 10h) is part of a header");
 	});
 
 	it("is damaged when a media entry is not safe or not unique", async () => {
@@ -271,6 +272,55 @@ describe("loading a file in", () => {
 		} finally {
 			globalThis.fetch = original;
 		}
+	});
+});
+
+describe("the subdecks held (Slice 10h)", () => {
+	const partial = async (topics?: Record<string, string[]>): Promise<PhoneDb> => {
+		const db = createMemoryPhoneDb();
+		await db.applyDeck({ meta: meta(NEW, { courses: ["k1"], ...(topics ? { topics } : {}) }), courses: [course("k1")], cards: [card("1", { topic: "W1" }), card("2", { topic: "W3" })], macReviews: [] });
+		return db;
+	};
+
+	it("travels in the file and comes back as the phone's choice", async () => {
+		const saved = await partial({ k1: ["W1", "W3"] });
+		const read = await readPhoneCardsFile((await buildCardsFile(saved, NOW))!.file);
+		assert.ok(read.ok);
+		assert.deepEqual(read.header.topics, { k1: ["W1", "W3"] });
+		const empty = createMemoryPhoneDb();
+		await importCardsFile(empty, (await buildCardsFile(saved, NOW))!.file);
+		assert.deepEqual((await empty.load())!.meta.topics, { k1: ["W1", "W3"] });
+	});
+
+	it("is left out of the file and of the phone when every course is held whole", async () => {
+		const file = (await buildCardsFile(await partial(), NOW))!.file;
+		const read = await readPhoneCardsFile(file);
+		assert.ok(read.ok);
+		assert.equal("topics" in read.header, false);
+		const empty = createMemoryPhoneDb();
+		await importCardsFile(empty, file);
+		assert.equal((await empty.load())!.meta.topics, undefined);
+		const emptyChoice = await readPhoneCardsFile(blobOf(header({ topics: {} })));
+		assert.ok(emptyChoice.ok);
+		assert.equal("topics" in emptyChoice.header, false, "an empty choice is no choice");
+	});
+
+	it("reads a file saved before subdecks existed as every course whole", async () => {
+		const read = await readPhoneCardsFile(blobOf(header()));
+		assert.ok(read.ok);
+		const empty = createMemoryPhoneDb();
+		await importCardsFile(empty, blobOf(header()));
+		assert.equal((await empty.load())!.meta.topics, undefined);
+	});
+
+	it("keeps the choice of the file over an older phone's own, with the cards it belongs to", async () => {
+		const older = await partial({ k1: ["W1"] });
+		await older.applyDeck({ meta: meta(OLD, { courses: ["k1"], topics: { k1: ["W1"] } }), courses: [course("k1")], cards: [card("1", { topic: "W1" })], macReviews: [] });
+		const result = await importCardsFile(older, (await buildCardsFile(await partial({ k1: ["W1", "W3"] }), NOW))!.file);
+		assert.ok(result.kind === "ok" && result.tookDeck);
+		const snap = (await older.load())!;
+		assert.deepEqual(snap.meta.topics, { k1: ["W1", "W3"] });
+		assert.deepEqual(snap.cards.map((c) => c.id), ["1", "2"]);
 	});
 });
 

@@ -10,7 +10,7 @@
 
 import { PHONE_CARDS_KIND, PHONE_CARDS_SCHEMA, PHONE_DECK_SCHEMA } from "./contracts/mobile.ts";
 import type { PhoneCardsHeader, PhoneCardsMedia } from "./contracts/mobile.ts";
-import { readPhoneDeck } from "./phone-deck.ts";
+import { cleanTopicChoice, readPhoneDeck } from "./phone-deck.ts";
 import { cleanCardOps } from "./phone-ops.ts";
 import { cleanReviewLines } from "./phone-sync.ts";
 
@@ -56,6 +56,8 @@ export function readPhoneCardsHeader(raw: unknown): { header: PhoneCardsHeader; 
 	if (!Array.isArray(media) || !media.every((m) => isRecord(m) && validMediaName(m.name) && typeof m.mime === "string" && m.mime.length <= 100 && Number.isInteger(m.size) && (m.size as number) >= 0)) return null;
 	const names = media.map((m) => (m as PhoneCardsMedia).name);
 	if (new Set(names).size !== names.length) return null;
+	const topics = raw.topics === undefined ? undefined : cleanTopicChoice(raw.topics);
+	if (topics === null) return null;
 	const unsent = cleanReviewLines(raw.unsent ?? []);
 	const ops = cleanCardOps(raw.ops ?? []);
 	if (!unsent || !ops) return null;
@@ -82,6 +84,7 @@ export function readPhoneCardsHeader(raw: unknown): { header: PhoneCardsHeader; 
 			deckAt,
 			macReviews: macReviews as number,
 			held: held as string[],
+			...(topics && Object.keys(topics).length > 0 ? { topics } : {}),
 			...(deck.catalog ? { catalog: deck.catalog } : {}),
 			courses: deck.courses,
 			cards: deck.cards,

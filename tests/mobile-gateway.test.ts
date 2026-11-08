@@ -152,6 +152,9 @@ describe("the phone API", () => {
 		const token = await pairPhone();
 		const deck = await call("GET", "/api/phone/deck?reviewsFrom=0&courses=a,b", { headers: auth(token) });
 		assert.equal(deck.json().url, "/api/phone/deck?reviewsFrom=0&courses=a,b");
+		const topics = encodeURIComponent(JSON.stringify({ a: ["W1 Cell", ""], b: ["Ü: 1, 2"] }));
+		const parts = await call("GET", `/api/phone/deck?reviewsFrom=0&courses=a,b&topics=${topics}`, { headers: auth(token) });
+		assert.equal(parts.json().url, `/api/phone/deck?reviewsFrom=0&courses=a,b&topics=${topics}`, "the subdeck choice (Slice 10h) goes through untouched");
 		const catalog = await call("GET", "/api/phone/catalog", { headers: auth(token) });
 		assert.equal(catalog.status, 200);
 		assert.equal((await call("GET", "/api/phone/catalog")).status, 401, "no key, no catalog");

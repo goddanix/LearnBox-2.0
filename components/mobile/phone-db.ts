@@ -9,7 +9,7 @@
  */
 
 import { newOps, newReviews, opKey, reviewKey } from "@/src/core";
-import type { PhoneCardOp, PhoneCatalogEntry, StudyCard, StudyCourse, StudyReview } from "@/src/core";
+import type { PhoneCardOp, PhoneCatalogEntry, PhoneTopicChoice, StudyCard, StudyCourse, StudyReview } from "@/src/core";
 
 /** What the phone remembers about its copy. */
 export interface PhoneMeta {
@@ -22,6 +22,8 @@ export interface PhoneMeta {
 	macReviews: number;
 	/** The courses the learner chose to hold here (Slice 10g). Absent on a phone that took everything before the choice existed. */
 	courses?: string[];
+	/** The subdecks held, for the courses held in part (Slice 10h). A course that is not in here is held whole — new subdecks of it included. */
+	topics?: PhoneTopicChoice;
 	/** Every course on the Mac as of the last update: the list the choice is made from (absent before Slice 10g). */
 	catalog?: PhoneCatalogEntry[];
 }
@@ -29,6 +31,11 @@ export interface PhoneMeta {
 /** The ids of the courses this phone holds: the learner's choice, or — for a phone from before the choice existed — all it has. */
 export function heldCourseIds(snap: Pick<PhoneSnapshot, "meta" | "courses">): string[] {
 	return snap.meta.courses ?? snap.courses.map((c) => c.id);
+}
+
+/** The subdecks this phone holds of the courses it holds in part (none listed: every course whole). */
+export function heldTopicChoice(snap: Pick<PhoneSnapshot, "meta">): PhoneTopicChoice {
+	return snap.meta.topics ?? {};
 }
 
 /** One review line the phone holds: `sent` is false for an answer given here that the Mac does not have yet. */

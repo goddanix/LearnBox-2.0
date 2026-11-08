@@ -4,7 +4,7 @@
  * in; `restore` reads the answers and card changes of a backup file in. Both hand back the source as it is then.
  */
 
-import type { PhoneCardOp, StudyReview } from "@/src/core";
+import type { PhoneCardOp, PhoneTopicChoice, StudyReview } from "@/src/core";
 import type { CardsFileSource } from "@/src/core";
 import { buildCardsFile, importCardsFile } from "./phone-cards-file";
 import type { ImportCardsResult, PreparedCardsFile } from "./phone-cards-file";
@@ -34,8 +34,11 @@ export interface RestoreResult {
 export interface PhoneSource {
 	/** null: no deck on this phone yet. */
 	engine: PhoneEngine | null;
-	/** `courseIds`: the courses to hold on the phone from now on (without them: the ones it holds, or all on the first run). */
-	update(onProgress: (p: PullProgress) => void, courseIds?: readonly string[]): Promise<{ result: UpdateResult; source: PhoneSource }>;
+	/**
+	 * `courseIds`: the courses to hold on the phone from now on (without them: the ones it holds, or all on the first run).
+	 * `topics`: the subdecks of the courses held in part (a course not named comes whole).
+	 */
+	update(onProgress: (p: PullProgress) => void, courseIds?: readonly string[], topics?: Readonly<PhoneTopicChoice>): Promise<{ result: UpdateResult; source: PhoneSource }>;
 	restore(backup: { reviews: readonly StudyReview[]; ops?: readonly PhoneCardOp[] }): Promise<RestoreResult & { source: PhoneSource }>;
 	/** Everything the phone holds as one file to keep (null: nothing yet). */
 	saveCards(device?: string): Promise<PreparedCardsFile | null>;
@@ -46,11 +49,11 @@ export interface PhoneSource {
 export function sourceOver(db: PhoneDb, engine: PhoneEngine | null): PhoneSource {
 	return {
 		engine,
-		async update(onProgress, courseIds) {
+		async update(onProgress, courseIds, topics) {
 			// the answers and card changes first: if the Mac cannot be reached nothing else is attempted, and nothing is lost
 			if (engine && engine.unsent() + engine.unsentOps().length > 0) onProgress({ phase: "send", done: 0, total: 1 });
 			const pushed = await pushChanges(db);
-			const result = await pullDeck(db, onProgress, undefined, courseIds);
+			const result = await pullDeck(db, onProgress, undefined, courseIds, topics);
 			return {
 				result: { ...result, sent: pushed.reviews, sentOps: pushed.ops, newerOnMac: pushed.cardChanges.newerOnMac },
 				source: sourceOver(db, await startPhoneEngine(db)),

@@ -4,9 +4,9 @@
  * not fetched again; what the cards no longer use is dropped.
  */
 
-import { newReviews, readPhoneDeck } from "@/src/core";
-import type { PhoneDeck } from "@/src/core";
-import { heldCourseIds } from "./phone-db";
+import { newReviews, readPhoneDeck, topicsHeld } from "@/src/core";
+import type { PhoneDeck, PhoneTopicChoice } from "@/src/core";
+import { heldCourseIds, heldTopicChoice } from "./phone-db";
 import type { PhoneDb, PhoneMeta } from "./phone-db";
 import { PhoneApiError, phoneCall, phoneJson } from "./phone-http";
 
@@ -29,26 +29,42 @@ export interface PullResult {
 
 const PARALLEL_DOWNLOADS = 3;
 
+/** The subdeck choice for the given courses only (all of it when no courses are given). */
+function onlyCourses(choice: Readonly<PhoneTopicChoice>, courseIds: readonly string[] | undefined): PhoneTopicChoice {
+	return Object.fromEntries(Object.entries(choice).filter(([id]) => !courseIds || courseIds.includes(id)));
+}
+
+/** Does a course now hold subdecks it did not hold before? (null = the whole course.) */
+function widened(before: readonly string[] | null, after: readonly string[] | null): boolean {
+	if (before === null) return false;
+	return after === null || after.some((name) => !before.includes(name));
+}
+
 /**
  * Take the Mac's deck in. `courseIds` are the courses the learner wants on the phone; without them the phone keeps the
  * ones it holds (the first time: all the Mac has). Courses taken off the list leave the phone — their cards, their
- * answers the Mac already has, and the pictures only they use.
+ * answers the Mac already has, and the pictures only they use. `topics` narrows a course to some of its subdecks (a
+ * course it does not name comes whole); with a choice of courses and no `topics` every course comes whole, and with
+ * neither the phone keeps the subdecks it holds.
  */
 export async function pullDeck(
 	db: PhoneDb,
 	onProgress: (p: PullProgress) => void = () => {},
 	now: () => Date = () => new Date(),
 	courseIds?: readonly string[],
+	topics?: Readonly<PhoneTopicChoice>,
 ): Promise<PullResult> {
 	onProgress({ phase: "deck", done: 0, total: 1 });
 	const prior = await db.load();
 	const held = prior ? heldCourseIds(prior) : null;
+	const heldTopics = prior ? heldTopicChoice(prior) : {};
 	const chosen = courseIds ?? held ?? undefined;
-	// A course the phone did not hold before has answers on the Mac this phone never saw: start the ledger from the top.
+	const wantTopics = onlyCourses(topics ?? (courseIds ? {} : heldTopics), chosen);
+	// A course or subdeck the phone did not hold before has answers on the Mac this phone never saw: start the ledger from the top.
 	// (Lines it already has are recognised and not added twice.)
-	const grew = !!chosen && !!held && chosen.some((id) => !held.includes(id));
+	const grew = !!chosen && !!held && chosen.some((id) => !held.includes(id) || widened(topicsHeld(heldTopics, id), topicsHeld(wantTopics, id)));
 	const from = prior && !grew ? prior.meta.macReviews : 0;
-	const query = `reviewsFrom=${from}${chosen ? `&courses=${chosen.map(encodeURIComponent).join(",")}` : ""}`;
+	const query = `reviewsFrom=${from}${chosen ? `&courses=${chosen.map(encodeURIComponent).join(",")}` : ""}${Object.keys(wantTopics).length > 0 ? `&topics=${encodeURIComponent(JSON.stringify(wantTopics))}` : ""}`;
 	const raw = await phoneJson<unknown>(`/api/phone/deck?${query}`);
 	const deck: PhoneDeck | null = readPhoneDeck(raw);
 	if (!deck) throw new PhoneApiError("The Mac sent something unexpected.", "server");
@@ -58,13 +74,16 @@ export async function pullDeck(
 		(prior?.reviews ?? []).map((r) => r.review),
 		deck.reviews.filter((r) => onDeck.has(r.cardId)),
 	);
+	// what the Mac really gave: a course it no longer has drops out of the choice
+	const gave = deck.courses.map((c) => c.id);
+	const heldNow = onlyCourses(wantTopics, gave);
 	const meta: PhoneMeta = {
 		v: 1,
 		deckAt: deck.at,
 		syncedAt: now().toISOString(),
 		macReviews: deck.reviewsTotal,
-		// what the Mac really gave: a course it no longer has drops out of the choice
-		courses: deck.courses.map((c) => c.id),
+		courses: gave,
+		...(Object.keys(heldNow).length > 0 ? { topics: heldNow } : {}),
 		...(deck.catalog ? { catalog: deck.catalog } : {}),
 	};
 	try {

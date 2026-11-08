@@ -47,6 +47,7 @@ export async function buildCardsFile(db: PhoneDb, now: Date = new Date(), device
 		deckAt: snap.meta.deckAt,
 		macReviews: snap.meta.macReviews,
 		held: heldCourseIds(snap),
+		...(snap.meta.topics ? { topics: snap.meta.topics } : {}),
 		...(snap.meta.catalog ? { catalog: snap.meta.catalog } : {}),
 		courses: snap.courses,
 		cards: snap.cards,
@@ -103,6 +104,7 @@ export async function importCardsFile(db: PhoneDb, file: CardsFileSource): Promi
 			syncedAt: header.deckAt,
 			macReviews: header.macReviews,
 			courses: header.courses.map((c) => c.id),
+			...(header.topics && Object.keys(header.topics).length > 0 ? { topics: header.topics } : {}),
 			...(header.catalog ? { catalog: header.catalog } : {}),
 		};
 		const lines = newReviews((prior?.reviews ?? []).map((r) => r.review), header.reviews);

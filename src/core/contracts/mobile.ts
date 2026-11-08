@@ -96,6 +96,24 @@ export interface PhoneMediaEntry {
 	size: number;
 }
 
+/**
+ * One subdeck of a course in the phone's choice (Slice 10h): the cards that share a topic. `name` is the topic as the
+ * cards carry it; the empty name stands for the cards that have none.
+ */
+export interface PhoneCatalogTopic {
+	name: string;
+	cards: number;
+	/** Bytes of the pictures and sounds those cards use. A file two subdecks use counts for each, so the sum over subdecks can exceed the course's figure. */
+	mediaBytes: number;
+}
+
+/**
+ * Which subdecks of a course the phone holds, for the courses where it holds only some: course id → the topic names
+ * (the empty name = cards without a topic). A course that is not in the record is held whole — and so are the subdecks
+ * the Mac adds to it later.
+ */
+export type PhoneTopicChoice = Record<string, string[]>;
+
 /** One course as the phone's choice lists it (Slice 10g): what taking it would put on the phone. */
 export interface PhoneCatalogEntry {
 	id: string;
@@ -104,6 +122,8 @@ export interface PhoneCatalogEntry {
 	cards: number;
 	/** Bytes of the pictures and sounds those cards use (what the Mac has of them). */
 	mediaBytes: number;
+	/** The course's subdecks, by name (absent in a list cut before Slice 10h). */
+	topics?: PhoneCatalogTopic[];
 }
 
 /** GET /api/phone/catalog: every course on the Mac, so the phone can offer a choice before it takes anything. */
@@ -162,6 +182,8 @@ export interface PhoneCardsHeader {
 	macReviews: number;
 	/** The courses held on the phone. */
 	held: string[];
+	/** The subdecks held, for the courses held in part (absent: every course whole; Slice 10h). */
+	topics?: PhoneTopicChoice;
 	/** The Mac's course list at the last update. */
 	catalog?: PhoneCatalogEntry[];
 	courses: StudyCourse[];
