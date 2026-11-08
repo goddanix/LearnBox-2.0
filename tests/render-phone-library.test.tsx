@@ -1,7 +1,8 @@
 /**
  * Which courses the phone holds (Learnbox 2.0, Slice 10g): the folder button on the course list, the library screen
  * ("On this phone": a box per course, what leaves and what comes, Update), and the same choice on the first run — in a
- * live linkedom page with the phone's source and the Mac's list of courses faked.
+ * live linkedom page with the phone's source and the Mac's list of courses faked. Slice 10h: a course's subdecks, a box
+ * each, opened under the course.
  */
 import { dom } from "./helpers/linkedom-page.ts";
 import React, { act } from "react";
@@ -17,7 +18,7 @@ import type { PhoneMeta } from "../components/mobile/phone-db.ts";
 import { PhoneApiError } from "../components/mobile/phone-http.ts";
 import type { PhoneSource, UpdateResult } from "../components/mobile/phone-source.ts";
 import type { PhoneStudyApi } from "../components/mobile/study-api.ts";
-import type { PhoneCatalogEntry, StudyCourseSummary } from "../src/core/index.ts";
+import type { PhoneCatalogEntry, PhoneTopicChoice, StudyCourseSummary } from "../src/core/index.ts";
 
 void dom;
 const store = new Map<string, string>();
@@ -66,7 +67,7 @@ const summary = (id: string, name: string, total: number): StudyCourseSummary =>
 const RESULT: UpdateResult = { cards: 1100, courses: 2, reviews: 0, media: 0, mediaFailed: 0, sent: 0, sentOps: 0, newerOnMac: 0 };
 const metaOf = (over: Partial<PhoneMeta> = {}): PhoneMeta => ({ v: 1, deckAt: "2026-11-05T08:00:00.000Z", syncedAt: new Date(Date.now() - 5 * 60_000).toISOString(), macReviews: 0, ...over });
 
-type Update = (courseIds?: readonly string[]) => void;
+type Update = (courseIds?: readonly string[], topics?: PhoneTopicChoice) => void;
 function apiOf(courses: StudyCourseSummary[]): PhoneStudyApi {
 	const fail = async (): Promise<never> => { throw new Error("no study call expected"); };
 	return { courses: async () => courses, next: fail, answer: fail, undo: fail, weakSpots: async () => [], linkCards: async () => [], cardAction: fail } as unknown as PhoneStudyApi;
@@ -75,8 +76,8 @@ function apiOf(courses: StudyCourseSummary[]): PhoneStudyApi {
 function sourceHolding(courses: StudyCourseSummary[] | null, over: { meta?: Partial<PhoneMeta>; unsent?: number; onUpdate?: Update; fail?: Error } = {}): PhoneSource {
 	return {
 		engine: courses ? { api: apiOf(courses), meta: metaOf(over.meta), unsent: () => over.unsent ?? 0, unsentReviews: () => [], unsentOps: () => [] } : null,
-		update: async (_progress, courseIds) => {
-			over.onUpdate?.(courseIds);
+		update: async (_progress, courseIds, topics) => {
+			over.onUpdate?.(courseIds, topics);
 			if (over.fail) throw over.fail;
 			return { result: RESULT, source: sourceHolding(courses ?? [summary("a", "Anatomy", 800)], { meta: { courses: courseIds ? [...courseIds] : ["a"] } }) };
 		},
@@ -231,5 +232,156 @@ describe("the first run: which courses come", () => {
 		assert.equal($("phone-choice"), null);
 		await click($("phone-get-cards"));
 		assert.deepEqual(heard, [undefined]);
+	});
+});
+
+// ─── Slice 10h: the subdecks of a course ─────────────────────────────────────
+
+const ANA_TOPICS = [
+	{ name: "W1 Head", cards: 300, mediaBytes: 10_000_000 },
+	{ name: "W2 Arm", cards: 400, mediaBytes: 15_000_000 },
+	{ name: "", cards: 100, mediaBytes: 5_000_000 },
+];
+const MAC_T: PhoneCatalogEntry[] = [{ ...entry("a", "Anatomy", 800, 30_000_000), topics: ANA_TOPICS }, entry("b", "Biology", 300, 8_000_000), entry("c", "Chemistry", 120)];
+const expand = (id: string) => click($$("phone-choice-expand").find((b) => b.getAttribute("data-course") === id) ?? null);
+const topicBoxes = (id: string) => $$("phone-choice-topic").filter((i) => i.getAttribute("data-course") === id);
+const topicBox = (id: string, name: string) => topicBoxes(id).find((i) => i.getAttribute("data-topic") === name) ?? null;
+const ticksOf = (id: string) => $$("phone-choice-item").find((i) => i.getAttribute("data-course") === id)?.getAttribute("data-ticks");
+const lineOf = (id: string) => $$("phone-choice-line").find((i) => i.getAttribute("data-course") === id)?.textContent;
+type Heard = [readonly string[] | undefined, PhoneTopicChoice | undefined];
+
+describe("the library: which subdecks of a course this phone holds", () => {
+	it("keeps the subdecks closed until asked, and lists them with their cards and size when opened", async () => {
+		fakeMac(MAC_T);
+		await openLibrary({ meta: { courses: ["a", "b"], catalog: MAC_T } });
+		assert.equal(topicBoxes("a").length, 0, "closed to begin with");
+		assert.equal($$("phone-choice-expand").length, 1, "only the course that has subdecks to tell apart has a way to open them");
+		assert.equal(lineOf("a"), "800 cards · 30 MB · 3 subdecks");
+		await expand("a");
+		assert.deepEqual(topicBoxes("a").map((i) => [i.getAttribute("data-topic"), i.checked]), [["W1 Head", true], ["W2 Arm", true], ["", true]]);
+		const text = $("phone-choice-topics")!.textContent ?? "";
+		assert.match(text, /W1 Head300 cards · 10 MB/);
+		assert.match(text, /No subdeck100 cards · 5 MB/, "the nameless one is called what it is");
+		assert.equal($$("phone-choice-expand")[0]!.getAttribute("aria-expanded"), "true");
+		await expand("a");
+		assert.equal(topicBoxes("a").length, 0, "and closed again");
+	});
+
+	it("shows the subdecks the phone holds ticked and the others not, the course box half ticked", async () => {
+		fakeMac(MAC_T);
+		await openLibrary({ meta: { courses: ["a", "b"], topics: { a: ["W2 Arm"] }, catalog: MAC_T } });
+		assert.equal(ticksOf("a"), "some");
+		assert.equal($$("phone-choice-item")[0]!.indeterminate, true);
+		assert.equal(lineOf("a"), "1 of 3 subdecks · 400 cards · up to 15 MB");
+		await expand("a");
+		assert.deepEqual(topicBoxes("a").map((i) => i.checked), [false, true, false]);
+		assert.equal($("phone-choice-total")!.textContent, "2 courses · 700 cards · up to 23 MB of pictures and sounds");
+		assert.equal($("phone-library-apply")!.textContent, "Update now", "what it holds is what is ticked: nothing changed");
+	});
+
+	it("says which subdecks leave, keeps the course on the phone, and asks the update for exactly the ticked subdecks", async () => {
+		fakeMac(MAC_T);
+		const heard: Heard[] = [];
+		await openLibrary({ meta: { courses: ["a", "b"], catalog: MAC_T }, unsent: 2, onUpdate: (ids, topics) => heard.push([ids, topics]) });
+		await expand("a");
+		await click(topicBox("a", "W2 Arm"));
+		await click(topicBox("a", ""));
+		assert.equal(ticksOf("a"), "some");
+		assert.equal($("phone-library-leaving"), null, "no course leaves");
+		const note = $("phone-library-parts-leaving")!.textContent ?? "";
+		assert.match(note, /^Subdecks that leave: Anatomy \(W2 Arm, no subdeck\)\./);
+		assert.match(note, /2 answers only on this phone go to the Mac first, so nothing is lost\./);
+		assert.match(note, /They stay on the Mac and can come back any time\.$/);
+		assert.equal($("phone-library-apply")!.textContent, "Apply and update");
+		await click($("phone-library-apply"));
+		assert.deepEqual(heard, [[["a", "b"], { a: ["W1 Head"] }]]);
+		assert.equal($("phone-library"), null, "back on the course list once it worked");
+	});
+
+	it("sends no subdeck list for a course ticked whole — also after ticking the last box back", async () => {
+		fakeMac(MAC_T);
+		const heard: Heard[] = [];
+		await openLibrary({ meta: { courses: ["a", "b"], topics: { a: ["W1 Head"] }, catalog: MAC_T }, onUpdate: (ids, topics) => heard.push([ids, topics]) });
+		await expand("a");
+		await click(topicBox("a", "W2 Arm"));
+		await click(topicBox("a", ""));
+		assert.equal(ticksOf("a"), "all");
+		assert.match($("phone-library-parts-arriving")!.textContent ?? "", /^Subdecks that come: Anatomy \(W2 Arm, no subdeck\)\.$/);
+		await click($("phone-library-apply"));
+		assert.deepEqual(heard, [[["a", "b"], {}]], "the course is whole, so new subdecks come with it");
+	});
+
+	it("makes a course whole with its own box, and takes it off the phone with the same box", async () => {
+		fakeMac(MAC_T);
+		const heard: Heard[] = [];
+		await openLibrary({ meta: { courses: ["a", "b"], topics: { a: ["W1 Head"] }, catalog: MAC_T }, onUpdate: (ids, topics) => heard.push([ids, topics]) });
+		await tick("a");
+		assert.equal(ticksOf("a"), "all", "a course in part is finished by its box");
+		await tick("a");
+		assert.equal(ticksOf("a"), "none");
+		assert.match($("phone-library-leaving")!.textContent ?? "", /Leaves this phone: Anatomy\./);
+		await tick("a");
+		await click($("phone-library-apply"));
+		assert.deepEqual(heard, [[["a", "b"], {}]]);
+	});
+
+	it("takes the course off the phone when its last subdeck is unticked, and will not apply an empty phone", async () => {
+		fakeMac(MAC_T);
+		await openLibrary({ meta: { courses: ["a"], topics: { a: ["W1 Head"] }, catalog: MAC_T } });
+		await expand("a");
+		await click(topicBox("a", "W1 Head"));
+		assert.equal(ticksOf("a"), "none");
+		assert.ok($("phone-library-none"), "nothing is left on the phone");
+		assert.equal($("phone-library-apply")!.hasAttribute("disabled"), true);
+	});
+
+	it("brings a course with just the subdeck ticked", async () => {
+		fakeMac(MAC_T);
+		const heard: Heard[] = [];
+		await openLibrary({ meta: { courses: ["b"], catalog: MAC_T }, onUpdate: (ids, topics) => heard.push([ids, topics]) });
+		await expand("a");
+		await click(topicBox("a", "W2 Arm"));
+		assert.equal(ticksOf("a"), "some");
+		assert.match($("phone-library-arriving")!.textContent ?? "", /Comes to this phone: Anatomy\./);
+		await click($("phone-library-apply"));
+		assert.deepEqual(heard, [[["a", "b"], { a: ["W2 Arm"] }]]);
+	});
+
+	it("has no subdeck list when the Mac's list is from before subdecks", async () => {
+		fakeMac(MAC);
+		await openLibrary();
+		assert.equal($$("phone-choice-expand").length, 0);
+		assert.equal(lineOf("a"), "800 cards · 30 MB");
+	});
+});
+
+describe("the first run: which subdecks come", () => {
+	it("offers the subdecks of a course with every one ticked, and gets the ones left ticked", async () => {
+		fakeMac(MAC_T);
+		const heard: Heard[] = [];
+		await mount(sourceHolding(null, { onUpdate: (ids, topics) => heard.push([ids, topics]) }));
+		await expand("a");
+		assert.deepEqual(topicBoxes("a").map((i) => i.checked), [true, true, true]);
+		await click(topicBox("a", "W1 Head"));
+		assert.equal($("phone-choice-total")!.textContent, "3 courses · 920 cards · up to 28 MB of pictures and sounds");
+		await click($("phone-get-cards"));
+		assert.deepEqual(heard, [[["a", "b", "c"], { a: ["W2 Arm", ""] }]]);
+	});
+
+	it("sends no subdeck list when nothing was unticked", async () => {
+		fakeMac(MAC_T);
+		const heard: Heard[] = [];
+		await mount(sourceHolding(null, { onUpdate: (ids, topics) => heard.push([ids, topics]) }));
+		await click($("phone-get-cards"));
+		assert.deepEqual(heard, [[["a", "b", "c"], {}]]);
+	});
+
+	it("will not get nothing: every subdeck of the only course unticked leaves nothing to get", async () => {
+		fakeMac([MAC_T[0]!]);
+		await mount(sourceHolding(null));
+		await expand("a");
+		for (const t of ["W1 Head", "W2 Arm", ""]) await click(topicBox("a", t));
+		assert.equal(ticksOf("a"), "none");
+		assert.equal($("phone-get-cards")!.hasAttribute("disabled"), true);
 	});
 });

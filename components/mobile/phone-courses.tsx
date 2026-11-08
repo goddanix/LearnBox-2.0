@@ -3,7 +3,9 @@
 import { useState } from "react";
 import { DownloadIcon, FolderIcon, GraduationCapIcon, RefreshCwIcon } from "lucide-react";
 import { describeUnsent } from "@/src/core";
-import type { PhoneCatalogEntry, PhoneLesson, StudyCourseSummary, StudyLinkCard, StudyQueueCounts } from "@/src/core";
+import type { PhoneCatalogEntry, PhoneLesson, PhoneTopicChoice, StudyCourseSummary, StudyLinkCard, StudyQueueCounts } from "@/src/core";
+import { choiceOfAll, chosenCourses, chosenTopics, toggleCourse, toggleTopic } from "./phone-choice";
+import type { PhoneChoice } from "./phone-choice";
 import { PhoneCourseChoice } from "./phone-course-choice";
 import { PhoneLessonList, PhoneWeakSpots } from "./phone-course-extras";
 import { formatBytes } from "./phone-storage";
@@ -260,7 +262,8 @@ export function PhoneCourses({
 
 /**
  * The first run: nothing on the phone yet; the cards come from the Mac. With the Mac's list of courses at hand, which
- * ones come is the learner's choice (all ticked to begin with); without it, everything comes.
+ * ones come — and which of their subdecks — is the learner's choice (all ticked to begin with); without it, everything
+ * comes.
  */
 export function PhoneSetup({
 	updating,
@@ -276,21 +279,15 @@ export function PhoneSetup({
 	catalog?: readonly PhoneCatalogEntry[] | null;
 	/** What reading a cards file did, in a sentence. */
 	notice?: string | null;
-	/** `courseIds`: the ones ticked; absent when the phone has no list to choose from. */
-	onStart: (courseIds?: string[]) => void;
+	/** `courseIds`: the ones ticked; absent when the phone has no list to choose from. `topics`: the subdecks of the courses ticked in part. */
+	onStart: (courseIds?: string[], topics?: PhoneTopicChoice) => void;
 	/** Read a cards file in: the cards without the Mac. */
 	onLoadCards?: (file: File) => void;
 }) {
-	// null: the learner has not touched a box yet, so every course is ticked
-	const [touched, setTouched] = useState<ReadonlySet<string> | null>(null);
-	const selected = touched ?? new Set((catalog ?? []).map((e) => e.id));
-	const toggle = (id: string) =>
-		setTouched(() => {
-			const next = new Set(selected);
-			if (!next.delete(id)) next.add(id);
-			return next;
-		});
-	const ids = (catalog ?? []).filter((e) => selected.has(e.id)).map((e) => e.id);
+	// null: the learner has not touched a box yet, so every course is ticked, whole
+	const [touched, setTouched] = useState<PhoneChoice | null>(null);
+	const choice = touched ?? choiceOfAll(catalog ?? []);
+	const ids = chosenCourses(catalog ?? [], choice);
 	const choosing = catalog !== null && catalog.length > 0;
 	return (
 		<main className="mx-auto flex min-h-dvh w-full max-w-sm flex-col justify-center gap-4 px-4 py-10" data-testid="phone-setup">
@@ -300,8 +297,14 @@ export function PhoneSetup({
 			</p>
 			{choosing && (
 				<>
-					<p className="text-sm text-muted-foreground">Which courses should this phone keep? You can change this later.</p>
-					<PhoneCourseChoice entries={catalog} selected={selected} onToggle={toggle} disabled={updating !== null} />
+					<p className="text-sm text-muted-foreground">Which courses should this phone keep — and which of their subdecks? You can change this later.</p>
+					<PhoneCourseChoice
+							entries={catalog}
+							choice={choice}
+							onToggleCourse={(e) => setTouched(toggleCourse(choice, e))}
+							onToggleTopic={(e, name) => setTouched(toggleTopic(choice, e, name))}
+							disabled={updating !== null}
+						/>
 				</>
 			)}
 			{error && (
@@ -311,7 +314,7 @@ export function PhoneSetup({
 			)}
 			<button
 				type="button"
-				onClick={() => onStart(choosing ? ids : undefined)}
+				onClick={() => (choosing ? onStart(ids, chosenTopics(catalog, choice)) : onStart())}
 				disabled={updating !== null || (choosing && ids.length === 0)}
 				className="flex h-14 items-center justify-center gap-2 rounded-xl bg-foreground text-base font-medium text-background disabled:opacity-60"
 				data-testid="phone-get-cards"

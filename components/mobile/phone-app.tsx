@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { PhoneCatalogEntry, PhoneLesson, StudyCourseSummary, StudyLinkCard } from "@/src/core";
+import type { PhoneCatalogEntry, PhoneLesson, PhoneTopicChoice, StudyCourseSummary, StudyLinkCard } from "@/src/core";
 import { buildPhoneBackup, cardChangesText } from "@/src/core";
 import { keepAppForOffline } from "./offline-shell";
 import { getPhoneToken, phoneFetch, restorePhoneToken } from "./phone-auth";
@@ -265,9 +265,9 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 		}
 	};
 
-	/** Update from the Mac; `courseIds` change which courses the phone holds. True when it worked. */
+	/** Update from the Mac; `courseIds` change which courses the phone holds, `topics` which subdecks of them. True when it worked. */
 	const update = useCallback(
-		async (courseIds?: readonly string[]): Promise<boolean> => {
+		async (courseIds?: readonly string[], topics?: PhoneTopicChoice): Promise<boolean> => {
 			const current = sourceRef.current;
 			if (!current || updating) return false;
 			setError(null);
@@ -275,7 +275,7 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 			setNotice(null);
 			setUpdating({ phase: "deck", done: 0, total: 1 });
 			try {
-				const { result, source: next } = await current.update(setUpdating, courseIds);
+				const { result, source: next } = await current.update(setUpdating, courseIds, topics);
 				sourceRef.current = next;
 				setSource(next);
 				setUpdated(updateSummary(result));
@@ -384,7 +384,7 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 	if (fatal) return <p className="px-4 py-10 text-sm text-red-400" role="alert" data-testid="phone-error">{fatal}</p>;
 	if (!source) return <p className="px-4 py-10 text-sm text-muted-foreground">Loading…</p>;
 	const engine = source.engine;
-	if (!engine) return <PhoneSetup updating={updating} error={error} catalog={catalog} notice={notice} onStart={(ids) => void update(ids)} onLoadCards={(file) => void loadCards(file)} />;
+	if (!engine) return <PhoneSetup updating={updating} error={error} catalog={catalog} notice={notice} onStart={(ids, topics) => void update(ids, topics)} onLoadCards={(file) => void loadCards(file)} />;
 
 	const routeCourseId = route.kind === "course" || route.kind === "learn" ? route.courseId : null;
 	if (routeCourseId && !courses && !error) return <p className="px-4 py-10 text-sm text-muted-foreground">Loading…</p>;
@@ -396,14 +396,15 @@ export function PhoneApp({ open = openPhoneSource }: { open?: () => Promise<Phon
 			<PhoneLibrary
 				entries={entries}
 				held={held}
+				heldTopics={engine.meta.topics}
 				listState={catalog ? "mac" : catalogFailed || !online ? "phone" : "loading"}
 				unsent={engine.unsent()}
 				unsentOps={engine.unsentOps().length}
 				updating={updating}
 				error={error}
 				online={online}
-				onApply={(ids) =>
-					void update(ids).then((ok) => {
+				onApply={(ids, topics) =>
+					void update(ids, topics).then((ok) => {
 						if (ok) goBack(() => navigate({ kind: "courses" }));
 					})
 				}
