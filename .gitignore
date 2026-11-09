@@ -22,3 +22,7 @@ xai-credentials.json*
 
 # compiled by the beforePack hook (scripts/build-vision-ocr.cjs)
 build/bin/
+
+# SQLite sidecar files that the Anki import tests create
+tests/fixtures/anki/*-shm
+tests/fixtures/anki/*-wal

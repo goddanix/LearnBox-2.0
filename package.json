@@ -6,7 +6,20 @@
 		"name": "Amos Blomqvist",
 		"email": "255718537+amosblomqvist@users.noreply.github.com"
 	},
-	"homepage": "https://github.com/amosblomqvist/learnharness",
+	"contributors": [
+		{
+			"name": "GodDanix",
+			"url": "https://github.com/goddanix"
+		}
+	],
+	"homepage": "https://github.com/goddanix/learnbox",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/goddanix/learnbox.git"
+	},
+	"bugs": {
+		"url": "https://github.com/goddanix/learnbox/issues"
+	},
 	"desktopName": "learnharness.desktop",
 	"description": "Learnbox: adaptive AI teaching and practice for biophysics and biology, with a persistent knowledge graph (fork of LearnHarness, AGPL-3.0).",
 	"type": "module",

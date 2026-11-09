@@ -19,7 +19,7 @@ Object.assign(globalThis, { window: dom.window, document: dom.document, CustomEv
 const originalFetch = globalThis.fetch;
 const roots: { root: Root; host: HTMLElement }[] = [];
 const state = (over: Partial<UpdateState> = {}): UpdateState => ({ status: "idle", version: null, revision: 0, ...over });
-const props = { autoUpdate: true, onAutoUpdateChange: () => {}, version: "0.3.7", homepage: "https://github.com/amosblomqvist/learnharness" };
+const props = { autoUpdate: true, onAutoUpdateChange: () => {}, version: "0.3.7", homepage: "https://github.com/goddanix/learnbox" };
 const q = (host: ParentNode, id: string) => host.querySelector<HTMLElement>(`[data-testid='${id}']`);
 
 function deferred<T>() {
@@ -99,6 +99,15 @@ describe("General update rows", () => {
 		assert.ok(!html.includes(MANUAL_UPDATE_HINT)); assert.ok(!html.includes("update-status"));
 	});
 
+	it("credits the project it is based on and links to its own source (AGPL-3.0 notice, section 13)", () => {
+		const html = renderToStaticMarkup(<UpdateSettings {...props} />);
+		assert.ok(html.includes("based on"));
+		assert.ok(html.includes('href="https://github.com/amosblomqvist/learnharness"'));
+		assert.ok(html.includes(`href="${props.homepage}"`) && html.includes("Get the source code"));
+		const noHomepage = renderToStaticMarkup(<UpdateSettings {...props} homepage="" />);
+		assert.ok(noHomepage.includes("LearnHarness") && !noHomepage.includes("Get the source code"), "the credit stays when the source link is unknown");
+	});
+
 	it("unpackaged/unavailable updater shows the version-only surface", async () => {
 		const b = bridge(state({ status: "disabled" })); const host = await mount(<UpdateSettings {...props} />);
 		assert.ok(q(host, "row-version")); assert.equal(q(host, "update-check"), null);
@@ -108,7 +117,7 @@ describe("General update rows", () => {
 	it("idle shows two rows and clear consequences; opening Settings never checks", async () => {
 		const b = bridge(); const seen: boolean[] = [];
 		const host = await mount(<UpdateSettings {...props} onAutoUpdateChange={value => seen.push(value)} />);
-		assert.deepEqual([...host.children].map(el => el.getAttribute("data-testid")), ["row-version", "row-auto-update"]);
+		assert.deepEqual([...host.children].map(el => el.getAttribute("data-testid")), ["row-version", "row-source", "row-auto-update"]);
 		assert.ok(q(host, "row-version")!.contains(q(host, "update-check")));
 		assert.ok(host.textContent!.includes(MANUAL_UPDATE_HINT)); assert.ok(host.textContent!.includes(AUTO_UPDATE_HINT));
 		assert.equal(q(host, "update-status"), null); assert.equal(b.calls.check, 0);

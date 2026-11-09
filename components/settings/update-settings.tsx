@@ -14,6 +14,8 @@ export type UpdateState = {
 
 export const APP_VERSION = process.env.LH_VERSION ?? "";
 const HOMEPAGE = process.env.LH_HOMEPAGE ?? "";
+/** The project Learnbox is based on (AGPL-3.0 credit); the notice in NOTICE.md says the same. */
+const ORIGINAL_PROJECT = "https://github.com/amosblomqvist/learnharness";
 export const MANUAL_UPDATE_HINT = "Checking downloads available updates. Downloaded updates install when you quit the app.";
 export const AUTO_UPDATE_HINT = "Check at startup and every 24 hours. Turning this off does not stop updates already in progress or ready to install.";
 const UPDATE_ERROR = "Couldn’t check for updates. Try again later.";
@@ -102,6 +104,22 @@ export function UpdateSettings({
 						Check for updates
 					</Button>
 				))}
+			</SettingsRow>
+			<SettingsRow
+				label="Source code"
+				testid="row-source"
+				hint={
+					<>
+						<span className="block">
+							Free software under the AGPL-3.0, based on{" "}
+							<a href={ORIGINAL_PROJECT} target="_blank" rel="noopener noreferrer" className="underline-offset-2 hover:text-foreground hover:underline" data-testid="original-link">LearnHarness</a>
+							{" "}by Amos Blomqvist.
+						</span>
+						{homepage && <a href={homepage} target="_blank" rel="noopener noreferrer" className="underline-offset-2 hover:text-foreground hover:underline" data-testid="source-link">Get the source code</a>}
+					</>
+				}
+			>
+				{null}
 			</SettingsRow>
 			{active && (
 				<SettingsRow label="Automatic updates" hint={AUTO_UPDATE_HINT} testid="row-auto-update">
