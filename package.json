@@ -8,7 +8,7 @@
 	},
 	"homepage": "https://github.com/amosblomqvist/learnharness",
 	"desktopName": "learnharness.desktop",
-	"description": "An agent harness for learning: adaptive teaching, practice, and a persistent knowledge graph.",
+	"description": "Learnbox: adaptive AI teaching and practice for biophysics and biology, with a persistent knowledge graph (fork of LearnHarness, AGPL-3.0).",
 	"type": "module",
 	"private": true,
 	"main": "electron/main.cjs",
@@ -21,7 +21,9 @@
 		"typecheck": "tsc --noEmit",
 		"desktop:dev": "concurrently -k \"next dev\" \"LH_DEV_URL=http://localhost:3000 electron .\"",
 		"dev:fresh": "bash scripts/dev-fresh.sh",
-		"desktop:dist": "rm -rf dist .next/standalone && next build && node scripts/smoke-provider-runtime.mjs && node scripts/build-server.mjs && node scripts/smoke-server.mjs && DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} APPLE_KEYCHAIN_PROFILE=LH_NOTARY APPLE_TEAM_ID=JS6XN22HY6 electron-builder --mac --arm64"
+		"desktop:dist": "rm -rf dist .next/standalone && next build && node scripts/smoke-provider-runtime.mjs && node scripts/build-server.mjs && node scripts/smoke-server.mjs && DEVELOPER_DIR=${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Developer} APPLE_KEYCHAIN_PROFILE=LH_NOTARY APPLE_TEAM_ID=JS6XN22HY6 electron-builder --mac --arm64",
+		"desktop:dist:intel": "rm -rf dist .next/standalone \"$HOME/Learnbox-Build/_work\" && next build && node scripts/build-server.mjs && node scripts/smoke-server.mjs && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.intel.yml --mac dmg --x64 --config.directories.output=\"$HOME/Learnbox-Build/_work\"",
+		"learnbox:update": "bash scripts/learnbox-update.sh"
 	},
 	"dependencies": {
 		"@earendil-works/pi-agent-core": "1.4.0",
@@ -53,8 +55,8 @@
 		"mdast-util-from-markdown": "2.0.3",
 		"mdast-util-math": "3.0.0",
 		"media-chrome": "^4.19.2",
-		"micromark-extension-math": "3.1.0",
 		"mermaid": "^11.17.0",
+		"micromark-extension-math": "3.1.0",
 		"motion": "^13.1.1",
 		"nanoid": "^6.0.1",
 		"next": "^16.3.2",

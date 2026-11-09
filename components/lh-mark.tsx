@@ -1,42 +1,38 @@
 /**
- * LhMark — the app mark (owner's icon-no-padding.svg, 2026-09-17), inlined
- * as JSX so it rides along with the components (no network fetch, recolorable,
- * crisp at any size). 806×806 viewBox, no padding: sizing/padding is the
- * consumer's job. The gray path is the harness spiral; the white ring is
- * the mark's own stroke on dark backgrounds.
+ * LhMark — the app mark (Learnbox, 2026-10): an open box with a small
+ * knowledge graph rising out of it, the same motif as the app icon
+ * (build/icon-flat.svg) without the plate and gradients, so it stays crisp at
+ * the sidebar's 24px. Inlined as JSX so it rides along with the components (no
+ * network fetch, recolorable, crisp at any size). 700×700 viewBox, no padding:
+ * sizing/padding is the consumer's job. The box takes `currentColor`, the
+ * nodes are the brand amber.
  *
- * Replaces the "LH" wordmark text in the sidebar band (also the traffic-light
- * gutter's resident in the merged desktop chrome).
+ * Replaces the upstream spiral mark in the sidebar band (also the
+ * traffic-light gutter's resident in the merged desktop chrome). The export
+ * keeps its upstream name so the one consumer (sidebar.tsx) is untouched.
  */
 export function LhMark({ className = "" }: { className?: string }) {
 	return (
-		<svg
-			viewBox="0 0 806 806"
-			className={className}
-			style={{ fillRule: "evenodd", clipRule: "evenodd", strokeLinejoin: "round", strokeMiterlimit: 2 }}
-			aria-hidden="true"
-		>
-			<g transform="matrix(1,0,0,1,-109.002299,-109.002299)">
-				<g transform="matrix(0.939904,0,0,0.939904,30.769428,30.766742)">
-					<g transform="matrix(-0.232199,0,0,0.232199,1384.403797,-416.791824)">
-						<g transform="matrix(0.573992,-2.142166,2.142166,0.573992,-5516.07298,4432.117471)">
-							<path
-								d="M1234.728,3305.937C871.642,3324.965 587,3624.915 587,3988.5C587,4365.734 893.266,4672 1270.5,4672C1647.734,4672 1954,4365.734 1954,3988.5C1954,3880.637 1928.472,3774.304 1879.503,3678.197L1794.243,3721.64C1836.356,3804.292 1858.31,3895.737 1858.31,3988.5C1858.31,4312.921 1594.921,4576.31 1270.5,4576.31C946.079,4576.31 682.69,4312.921 682.69,3988.5C682.69,3675.817 927.482,3417.86 1239.736,3401.496L1234.728,3305.937Z"
-								style={{ fill: "rgb(148,148,148)" }}
-							/>
-						</g>
-						<g transform="matrix(1.261034,-0,-0,1.261034,1170.373407,-2014.261188)">
-							<path
-								d="M1270.5,3305C893.266,3305 587,3611.266 587,3988.5C587,4365.734 893.266,4672 1270.5,4672C1647.734,4672 1954,4365.734 1954,3988.5C1954,3611.266 1647.734,3305 1270.5,3305ZM1270.5,3471.537C1555.819,3471.537 1787.463,3703.181 1787.463,3988.5C1787.463,4273.819 1555.819,4505.463 1270.5,4505.463C985.181,4505.463 753.537,4273.819 753.537,3988.5C753.537,3703.181 985.181,3471.537 1270.5,3471.537Z"
-								style={{ fill: "#fff" }}
-							/>
-						</g>
-						<g transform="matrix(1.261034,0,-0,1.261034,3139.627182,-45.007413)">
-							<circle cx="1270.5" cy="3988.5" r="683.5" style={{ fill: "#fff" }} />
-						</g>
-					</g>
-				</g>
+		<svg viewBox="162 150 700 700" className={className} style={{ strokeLinejoin: "round", strokeLinecap: "round" }} aria-hidden="true">
+			{/* the box: faces, then the open top */}
+			<path d="M296 455 L512 580 L512 830 L296 705 Z" fill="currentColor" fillOpacity="0.28" />
+			<path d="M512 580 L728 455 L728 705 L512 830 Z" fill="currentColor" fillOpacity="0.5" />
+			<path d="M512 330 L728 455 L512 580 L296 455 Z" fill="#101013" fillOpacity="0.9" />
+			{/* the graph rising out of the opening */}
+			<g stroke="#ffb454" strokeWidth="22" fill="none">
+				<path d="M512 448 L388 292 M512 448 L566 188 M512 448 L690 318 M388 292 L566 188 M566 188 L690 318" />
 			</g>
+			<g fill="#ffcf8a" stroke="#ffb454" strokeWidth="14">
+				<circle cx="388" cy="292" r="38" />
+				<circle cx="566" cy="188" r="46" />
+				<circle cx="690" cy="318" r="38" />
+				<circle cx="512" cy="448" r="32" />
+			</g>
+			{/* the box edges and the front rim */}
+			<g fill="none" stroke="currentColor" strokeWidth="24">
+				<path d="M296 455 L512 580 L728 455 M296 455 L296 705 L512 830 L728 705 L728 455 M512 580 L512 830" />
+			</g>
+			<path d="M296 455 L512 330 L728 455" fill="none" stroke="currentColor" strokeOpacity="0.6" strokeWidth="24" />
 		</svg>
 	);
 }

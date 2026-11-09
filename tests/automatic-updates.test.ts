@@ -21,7 +21,8 @@ function fixture({ packaged = true, updaterMissing = false } = {}) {
 	const handles = new Map<string, (event: unknown) => unknown>();
 	const windows: FakeWindow[] = [];
 	let enumerationFails = false;
-	let userData = "/fixture/custom-user-data";
+	// userData is pinned to <appData>/Learnbox by the shell (the data folder keeps its name whatever the app is called)
+	let userData = "/fixture/app-data/Learnbox";
 	let menu: { submenu?: { label?: string; click?: () => void }[] }[] = [];
 	class FakeUpdater extends EventEmitter {
 		checks = 0;
@@ -72,8 +73,8 @@ function fixture({ packaged = true, updaterMissing = false } = {}) {
 		isPackaged: packaged,
 		name: "LearnHarness",
 		setName() {},
-		getPath: () => userData,
-		setPath: (_: string, value: string) => { userData = value; },
+		getPath: (key: string) => key === "appData" ? "/fixture/app-data" : userData,
+		setPath: (key: string, value: string) => { if (key === "userData") userData = value; },
 		requestSingleInstanceLock: () => false,
 		quit() {},
 		whenReady: async () => {},
@@ -127,7 +128,7 @@ describe("automatic-update preference gate", () => {
 		f.run("setupAutoUpdater()");
 		await f.check();
 		assert.equal(f.updater.checks, 0);
-		assert.deepEqual(f.settingsReads, ["/fixture/custom-user-data-dev/data/settings.json"]);
+		assert.deepEqual(f.settingsReads, ["/fixture/app-data/Learnbox-dev/data/settings.json"]);
 		await f.check(true);
 		assert.equal(f.updater.checks, 1);
 		assert.equal(f.settingsReads.length, 1);

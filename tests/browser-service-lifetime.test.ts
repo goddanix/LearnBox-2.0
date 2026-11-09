@@ -32,7 +32,7 @@ function helperFixture(connected = true, channel = true) {
 	});
 	Object.defineProperty(process, "stdin", { get() { state.stdinReads++; return stdin; } });
 	const app = {
-		setName() {}, commandLine: { appendSwitch() {} }, whenReady: () => appReady,
+		setName() {}, getPath: () => "/fixture/app-data", setPath() {}, commandLine: { appendSwitch() {} }, whenReady: () => appReady,
 		quit() { state.quits++; }, exit(code: number) { state.exits.push(code); },
 	};
 	class FakeWindow {

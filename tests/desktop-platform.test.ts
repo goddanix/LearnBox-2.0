@@ -38,6 +38,31 @@ function windowOptions(platform: string, env: Record<string, string> = {}) {
 	return JSON.parse(JSON.stringify(win.options));
 }
 
+describe("app name", () => {
+	it("is Learnbox 2.0 on screen, while the data stays in Application Support/Learnbox", () => {
+		const calls: unknown[][] = [];
+		const electron = {
+			app: {
+				setName: (name: string) => calls.push(["name", name]),
+				getPath: (key: string) => (key === "appData" ? "/fixture/Application Support" : "/fixture/derived-from-the-name"),
+				setPath: (key: string, value: string) => calls.push(["path", key, value]),
+				requestSingleInstanceLock: () => false,
+				quit() {},
+			},
+			BrowserWindow: class {},
+			session: { defaultSession: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} } },
+		};
+		runInNewContext(mainSource, {
+			require: (id: string) => id === "electron" ? electron : mainRequire(id),
+			process: { platform: "darwin", argv: [], env: {}, on() {} },
+			__dirname: dirname(mainFile),
+		}, { filename: mainFile });
+		// the name first (menu, Dock, window title), then userData pinned — never derived from the name
+		assert.deepEqual(calls, [["name", "Learnbox 2.0"], ["path", "userData", "/fixture/Application Support/Learnbox"]]);
+		assert.equal(windowOptions("darwin").title, "Learnbox 2.0");
+	});
+});
+
 describe("desktop window chrome", () => {
 	it("macOS keeps the proven traffic lights and does not enable WCO", () => {
 		const options = windowOptions("darwin");

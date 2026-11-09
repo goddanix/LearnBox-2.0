@@ -42,15 +42,20 @@ const path = require("node:path");
 // renderer owns the number; this is the IPC widen target).
 const SIDEBAR_AUTOCLOSE = 928;
 
-const PRODUCT_NAME = "LearnHarness";
+const PRODUCT_NAME = "Learnbox 2.0";
+// The folder under Application Support that holds ALL user data. It is NOT derived from the visible
+// name any more: the app was renamed "Learnbox 2.0" (2026-11) and the data of the "Learnbox" app must
+// stay where it is — a folder named after the new product name would start the app empty.
+const DATA_FOLDER = "Learnbox";
 
 // APP NAME → userData (owner, 2026-10-10): the Application Support dir is
-// exactly "LearnHarness" in dev AND packaged. Packaged Electron would
-// otherwise derive it from package.json "name" (now lowercase
-// "learnharness"), and productName metadata alone doesn't reach app.name.
-// Must run before the LH_DEV_URL suffix below — dev becomes
-// "LearnHarness-dev".
+// pinned, in dev AND packaged. Packaged Electron would otherwise derive it
+// from package.json "name" (lowercase "learnharness"), and productName
+// metadata alone doesn't reach app.name — so the name is set first (menu,
+// Dock, window title) and userData is then pinned to DATA_FOLDER.
+// Must run before the LH_DEV_URL suffix below — dev becomes "Learnbox-dev".
 app.setName(PRODUCT_NAME);
+app.setPath("userData", path.join(app.getPath("appData"), DATA_FOLDER));
 const AUTH_FILE = () => path.join(app.getPath("userData"), "auth.json");
 const DATA_DIR = () => path.join(app.getPath("userData"), "data");
 

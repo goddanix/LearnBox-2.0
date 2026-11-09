@@ -10,7 +10,7 @@ const ui = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jetbrains" });
 const prose = Source_Sans_3({ subsets: ["latin"], variable: "--font-sans3" });
 
 export const metadata: Metadata = {
-	title: "Learning Harness",
+	title: "Learnbox 2.0",
 	description: "A teacher agent with a memory — sessions, quizzes, and a knowledge graph of what you know.",
 };
 

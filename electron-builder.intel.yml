@@ -1,0 +1,14 @@
+# Learnbox — local Intel (x64) macOS build. Extends the upstream config but
+# only ad-hoc signs, never notarizes, and has no update feed: the upstream publish
+# target (amosblomqvist/learnharness) must not overwrite Learnbox.
+extends: ./electron-builder.yml
+publish: null
+mac:
+  icon: build/icon.icns
+  # Ad-hoc signature ("-"): no certificate, no Apple account. macOS grants the
+  # microphone (and lists the app under Privacy & Security) only to a SIGNED
+  # bundle; a completely unsigned one never appears there. The signature binds
+  # to this exact build, so a rebuild asks for the microphone again.
+  identity: "-"
+  notarize: false
+  hardenedRuntime: false
