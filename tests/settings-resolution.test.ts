@@ -15,6 +15,7 @@ import {
 	renderingEnabled,
 	resolveConversationSpec,
 	resolveModelSpec,
+	resolveProberSpec,
 	resolveRoleSpec,
 	resolveSettings,
 	resolveSlot,
@@ -266,5 +267,27 @@ describe("the graph channel gates (the wave's seam honoring)", () => {
 		assert.deepEqual(eff.agent.graphTools, {});
 		const off = resolveSettings({ version: 1, agent: { graphTools: { enabled: false } } });
 		assert.deepEqual(off.agent.graphTools, { enabled: false });
+	});
+});
+describe("resolveProberSpec (the prober phase's model)", () => {
+	const conversation = { provider: "claude-cli", id: "claude-sonnet-5-5", thinkingLevel: "medium" as const };
+	const cheap = { provider: "claude-cli", id: "claude-haiku-5-5", thinkingLevel: "low" as const };
+	const probing = { probing: true, practice: false };
+
+	it("probing runs on the cheap slot, with the slot's own thinking level", () => {
+		assert.deepEqual(resolveProberSpec(conversation, cheap, probing), { provider: "claude-cli", id: "claude-haiku-5-5", thinkingLevel: "low" });
+	});
+	it("a slot without a level rides the conversation's level", () => {
+		assert.equal(resolveProberSpec(conversation, { ...cheap, thinkingLevel: undefined }, probing).thinkingLevel, "medium");
+	});
+	it("teaching keeps the session's model", () => {
+		assert.equal(resolveProberSpec(conversation, cheap, { probing: false, practice: false }), conversation);
+	});
+	it("practice sessions never switch", () => {
+		assert.equal(resolveProberSpec(conversation, cheap, { probing: true, practice: true }), conversation);
+	});
+	it("an empty cheap slot or another provider keeps the session's model", () => {
+		assert.equal(resolveProberSpec(conversation, null, probing), conversation);
+		assert.equal(resolveProberSpec(conversation, { provider: "openai", id: "gpt-x" }, probing), conversation);
 	});
 });

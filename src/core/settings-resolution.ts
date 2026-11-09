@@ -113,6 +113,21 @@ export function resolveConversationSpec(
 	};
 }
 
+/** The prober phase's own model (Learnbox, 2026-10, owner): the prober asks short
+ *  questions, so while a teach session is still probing it runs on the CHEAP
+ *  slot; the teacher then takes over on the session's own model. Only when the
+ *  cheap slot sits on the SAME provider as the conversation — a different
+ *  provider would need its own key/subscription gates, so the session's model
+ *  stays. Practice sessions have no prober and never switch. */
+export function resolveProberSpec(
+	conversation: EffectiveModelSpec,
+	cheap: EffectiveSlot | null,
+	phase: { probing: boolean; practice: boolean },
+): EffectiveModelSpec {
+	if (!phase.probing || phase.practice || !cheap || cheap.provider !== conversation.provider) return conversation;
+	return { provider: cheap.provider, id: cheap.id, thinkingLevel: cheap.thinkingLevel ?? conversation.thinkingLevel };
+}
+
 /** Full-chain resolution for ANY role (BYOK, owner 2026-09-22):
  *  per-role override (background roles only) → SLOT → NOTHING. The
  *  conversation pair (prober/teacher) resolves the same chain MINUS the

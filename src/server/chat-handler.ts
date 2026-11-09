@@ -37,6 +37,7 @@ import {
 	extractionEnabled,
 	graphToolsEnabled,
 	resolveConversationSpec,
+	resolveProberSpec,
 	resolveRoleSpec,
 } from "../core/settings-resolution.ts";
 import { modelsNotConfigured, providerKeyMissing as providerKeyMissingEnvelope, type ProviderKeyMissing } from "../core/settings.ts";
@@ -240,7 +241,9 @@ export async function handleChatInput(
 		noDispatch: (kind) => requestCycle?.noDispatch(kind),
 	};
 	let conversationEngine: PiEngine;
-	try { conversationEngine = piEngineForSpec(conversation, () => callPurpose.background, lifecycle); }
+	// The prober phase runs on the cheap slot (see resolveProberSpec); the teacher on the session's model.
+	const engineSpec = resolveProberSpec(conversation, effective.models.cheap, { probing: !hasProbeDone(record.messages), practice: record.kind === "practice" });
+	try { conversationEngine = piEngineForSpec(engineSpec, () => callPurpose.background, lifecycle); }
 	catch { return Response.json({ error: conversation.provider === "chatgpt" ? chatGPTStreamError("model catalog") : isSubscriptionProvider(conversation.provider) ? nativeSubscriptionError(conversation.provider, "model catalog") : "The selected model is unavailable." }, { status: 503 }); }
 	const modelIdForCompaction = `${conversationEngine.model.provider}:${conversationEngine.model.id}`;
 	await ensureCompacted(
