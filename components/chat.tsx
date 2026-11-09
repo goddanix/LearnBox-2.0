@@ -55,11 +55,12 @@ import { SessionMessageNavigation } from "@/components/session-navigation";
 import { PracticeDock } from "@/components/practice-dock";
 import { ThinkingCard, type PracticeThinkingData } from "@/components/practice-cards";
 import { GraphContextCard, type GraphContextData } from "@/components/graph-context-card";
+import { LectureContextCard } from "@/components/lecture-context-card";
 import { StudyContextCard } from "@/components/study-context-card";
 import { SessionCourseChip } from "@/components/session-course-chip";
 import { LessonCardsButton } from "@/components/lesson-cards-button";
 import { TopBar } from "@/components/top-bar";
-import type { ArtifactPartProps, JobRecord, Phase3, QuestionAnswerData, QuestionFormDraft, StudyContextData, TurnUsage, SessionPricing } from "@/src/core";
+import type { ArtifactPartProps, JobRecord, LectureContextData, Phase3, QuestionAnswerData, QuestionFormDraft, StudyContextData, TurnUsage, SessionPricing } from "@/src/core";
 import type { LhViewMessage } from "@/src/core";
 import { PhaseChip, PhaseDivider } from "@/components/phase-divider";
 import {
@@ -1370,6 +1371,8 @@ export function Chat({
 										switch (part.type) {
 											case "data-graph-context":
 												return <GraphContextCard key={pi} data={part.data as GraphContextData} />;
+											case "data-lecture-context":
+												return <LectureContextCard key={pi} data={part.data as LectureContextData} />;
 											case "data-study-context":
 												return <StudyContextCard key={pi} data={part.data as StudyContextData} />;
 											case "data-compaction":

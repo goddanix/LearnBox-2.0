@@ -6,7 +6,8 @@ import { CornerDownLeftIcon, DumbbellIcon } from "lucide-react";
 import { GraphView } from "@/components/graph-view";
 import { MinimalHome } from "@/components/minimal-home";
 import { SetupDialog } from "@/components/setup-dialog";
-import { ComposerActions, NodePickerControl } from "@/components/composer-actions";
+import { ComposerActions, LecturePickerControl, NodePickerControl } from "@/components/composer-actions";
+import { LecturesDialog, countPick, pickRequest, type LecturePick } from "@/components/lectures-dialog";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { DictationBar, joinDictation, useDictation } from "@/components/dictation";
 import { useFieldCycle } from "@/components/field-cycle";
@@ -95,6 +96,10 @@ export function Home({
 	const [mode, setMode] = useState<"teach" | "practice">("teach");
 	const [practiceProps, setPracticeProps] = useState<{ id: string; name: string; statement: string }[]>([]);
 	const [chainSelectOpen, setChainSelectOpen] = useState(false);
+	// The lecture pick (Learnbox): lectureId → topicId → depth, edited in the
+	// lectures dialog and sent with a TEACH create. Practice works from the graph.
+	const [lecturePick, setLecturePick] = useState<LecturePick>({});
+	const [lecturesOpen, setLecturesOpen] = useState(false);
 	// The chain table is CONTROLLED off this id set (the lifted pick).
 	const pickedIds = useMemo(() => new Set(practiceProps.map((p) => p.id)), [practiceProps]);
 
@@ -144,6 +149,7 @@ export function Home({
 					title: t,
 					...(mode === "practice" ? { kind: "practice" } : {}),
 					...(practiceProps.length > 0 ? { graphContext: { propositions: practiceProps } } : {}),
+					...(mode === "teach" && countPick(lecturePick).topics > 0 ? { lectureContext: pickRequest(lecturePick) } : {}),
 				}),
 			});
 			const { id } = (await res.json()) as { id: string };
@@ -225,6 +231,13 @@ export function Home({
 								onOpen={() => setChainSelectOpen(true)}
 								onClear={() => setPracticeProps([])}
 								cardsHref={`/create?nodes=${practiceProps.map((p) => encodeURIComponent(p.id)).join(",")}`}
+							/>
+						)}
+						lectures={mode === "teach" && (
+							<LecturePickerControl
+								topics={countPick(lecturePick).topics}
+								onOpen={() => setLecturesOpen(true)}
+								onClear={() => setLecturePick({})}
 							/>
 						)}
 						setup={zeroKeys ? (
@@ -323,6 +336,7 @@ export function Home({
 			    interception's landing surface — stage 1 is the self-contained
 			    first-key screen (zero-keys wave); Save never sends — the
 			    draft stays for the learner to send (owner 2026-10-09). */}
+			<LecturesDialog open={lecturesOpen} onClose={() => setLecturesOpen(false)} pick={lecturePick} onPick={setLecturePick} />
 			<SetupDialog
 				open={setupOpen}
 				onClose={() => setSetupOpen(false)}

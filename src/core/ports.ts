@@ -20,6 +20,7 @@ import type {
 	GraphNode,
 	JobKind,
 	JobRecord,
+	LectureSource,
 	ExtractionRunUsage,
 	PlanTree,
 	Position,
@@ -174,6 +175,31 @@ export interface JobStore {
 	 *  route refuses while jobs are still running, so by the time this
 	 *  fires every record is terminal. */
 	deleteJobsForChat(chatId: string): number;
+}
+
+// ─── LibraryStore — the lecture PDF library (data/library) ───────────────────
+
+/** A lecture upload: the file's base name and its raw bytes. */
+export interface AddLectureInit {
+	fileName: string;
+	data: Uint8Array;
+}
+
+export interface LibraryStore {
+	/** Store one PDF. Identical bytes (sha256) return the existing source with
+	 *  duplicate:true instead of storing twice. Throws LibraryError for an
+	 *  empty file, a non-PDF, or one over MAX_LECTURE_BYTES. */
+	add(init: AddLectureInit): { source: LectureSource; duplicate: boolean };
+	get(id: string): LectureSource | null;
+	/** Every source, newest first. */
+	list(): LectureSource[];
+	/** Merge a patch (identity fields id/sha256/addedAt are immutable; a field set to
+	 *  undefined is removed); null if unknown. */
+	update(id: string, patch: Partial<Omit<LectureSource, "v" | "id" | "sha256" | "addedAt">>): LectureSource | null;
+	/** Absolute path of the stored PDF, or null if unknown. */
+	pdfPath(id: string): string | null;
+	/** Delete the PDF and its record; false if unknown. */
+	remove(id: string): boolean;
 }
 
 // ─── MobileStore — phone access (data/mobile) ────────────────────────────────

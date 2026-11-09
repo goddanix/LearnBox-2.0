@@ -10,6 +10,7 @@ import { chatStore } from "../store/chats.ts";
 import { createStore } from "../store/create.ts";
 import { graphStore } from "../store/graph.ts";
 import { jobStore } from "../store/jobs.ts";
+import { libraryStore } from "../store/library.ts";
 import { settingsStore } from "../store/settings.ts";
 import { studyStore } from "../store/study.ts";
 import { resolveSettings, type EffectiveSettings } from "../core/settings-resolution.ts";
@@ -19,6 +20,7 @@ export const stores = {
 	createStore,
 	graphStore,
 	jobStore,
+	libraryStore,
 	settingsStore,
 	studyStore,
 };

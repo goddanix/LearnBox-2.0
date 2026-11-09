@@ -1,6 +1,6 @@
 import { chainsForSelection, formatChainLine } from "@/src/core";
-import { newGraphContextMessage, newStudyContextMessage, type GraphContextPick } from "@/src/core";
-import { compactionInFlight, createChat, isTurnRunning, listChats, readSettingsRecord, StudyInputError, studyContextFor, stores, titleFromPrompt } from "@/src/server";
+import { newGraphContextMessage, newLectureContextMessage, newStudyContextMessage, type GraphContextPick } from "@/src/core";
+import { compactionInFlight, createChat, isTurnRunning, listChats, readSettingsRecord, resolveLectureSelection, StudyInputError, studyContextFor, stores, titleFromPrompt } from "@/src/server";
 import type { ChatListItem, StudyContextData } from "@/src/core";
 
 /** The session picker's list: record-derived summaries (phase, pending
@@ -20,7 +20,7 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-	const body = (await req.json().catch(() => ({}))) as { title?: unknown; kind?: unknown; graphContext?: unknown; study?: unknown };
+	const body = (await req.json().catch(() => ({}))) as { title?: unknown; kind?: unknown; graphContext?: unknown; lectureContext?: unknown; study?: unknown };
 	const title = typeof body.title === "string" ? body.title : "";
 	// Practice sessions (owner, 2026-10-04): kind "practice" marks the
 	// record — the practice agent + its tools from turn 1, no extraction.
@@ -86,6 +86,14 @@ export async function POST(req: Request) {
 			formatChainLine(c, Object.fromEntries(byId)),
 		);
 		markers.push(newGraphContextMessage(picks, chainLines));
+	}
+	// The lecture pick (Learnbox, 2026-10): resolved against the stored
+	// outlines — the request names ids and depths, never topic text — and
+	// carried as a marker before the learner's first message, like the map pick.
+	// Practice sessions work from the graph and take no lectures.
+	if (!kind) {
+		const lectures = resolveLectureSelection(body.lectureContext);
+		if (lectures.length > 0) markers.push(newLectureContextMessage(lectures));
 	}
 	if (markers.length > 0) stores.chatStore.saveMessages(chat.id, markers);
 	return Response.json({ id: chat.id, title: chat.title });

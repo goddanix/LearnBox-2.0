@@ -105,6 +105,15 @@ export async function pdfProbe(filePath: string): Promise<void> {
 	await task.destroy();
 }
 
+/** Page count only — no page walk, no text extraction (unlike pdfInfo). The
+ *  lecture library reads it on upload; garbage files throw pdfjs's error. */
+export async function pdfPageCount(filePath: string): Promise<number> {
+	const { doc, task } = await openDocument(filePath);
+	const pages = doc.numPages;
+	await task.destroy();
+	return pages;
+}
+
 /** pdf_info: page count + per-page triage signals. ALWAYS run first. */
 export async function pdfInfo(filePath: string): Promise<PdfInfo> {
 	const pdfjs = await loadPdfjs(); // OPS constant for the operator-list scan

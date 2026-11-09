@@ -11,9 +11,10 @@ import { SetupDialog } from "@/components/setup-dialog";
 import { useStrongKeyless, useZeroKeys, ZeroKeysPill } from "@/components/setup-cta";
 import { StatsBar } from "@/components/stats-bar";
 import { ChainTableOverlay } from "@/components/chain-table.tsx";
-import { ComposerActions, NodePickerControl } from "@/components/composer-actions";
+import { ComposerActions, LecturePickerControl, NodePickerControl } from "@/components/composer-actions";
+import { LecturesDialog, countPick, pickRequest, type LecturePick } from "@/components/lectures-dialog";
 import { DraftCourseControl } from "@/components/draft-course-control";
-import type { ChatSettings, GraphSnapshot, StudyLessonStart, StudyLinkCard } from "@/src/core";
+import type { ChatSettings, GraphSnapshot, LectureSelection, StudyLessonStart, StudyLinkCard } from "@/src/core";
 
 /** The draft's pick set (owner round 10): the SAME shape the home pick
  *  bar lifts — resolved nodes as the learner SAW them at pick time. */
@@ -46,6 +47,7 @@ export async function startDraftSession(
 	fetchLike: typeof fetch,
 	mode?: "practice",
 	picks?: readonly DraftPick[],
+	lectures?: LectureSelection,
 	study?: StudyLessonStart,
 ): Promise<string | null> {
 	const t = text.trim();
@@ -62,6 +64,7 @@ export async function startDraftSession(
 				? { title: t, kind: "practice", ...(picks && picks.length > 0 ? { graphContext: { propositions: picks } } : {}) }
 				: {
 						title: t,
+						...(lectures && lectures.lectures.length > 0 ? { lectureContext: lectures } : {}),
 						// The study course (and flashcards) the lesson is for: ids only, the server reads the text.
 						...(study && study.courseId ? { study } : {}),
 					},
@@ -88,6 +91,7 @@ export function DraftShell({
 	picks = [],
 	onOpenPicker,
 	onClearPicks,
+	lecturePicker,
 	coursePicker,
 	overlay,
 }: {
@@ -111,6 +115,8 @@ export function DraftShell({
 	picks?: DraftPick[];
 	onOpenPicker?: () => void;
 	onClearPicks?: () => void;
+	/** The lecture pill (Learnbox): teach drafts only — practice works from the graph. */
+	lecturePicker?: ReactNode;
 	/** The course field (Learnbox 2.0, Slice 9): teach drafts only — practice works from the graph. */
 	coursePicker?: ReactNode;
 	/** THE PICKER SLOT (owner round 10b): the chain-table overlay hosts
@@ -197,6 +203,7 @@ export function DraftShell({
 									picker={(picks.length > 0 || mode === "practice") && (
 										<NodePickerControl count={picks.length} onOpen={onOpenPicker} onClear={onClearPicks} />
 									)}
+									lectures={mode === "teach" ? lecturePicker : undefined}
 									course={mode === "teach" ? coursePicker : undefined}
 									setup={setupCta}
 								/>
@@ -280,6 +287,15 @@ export function NewSession({
 		setPicks(next);
 	};
 	const [pickerOpen, setPickerOpen] = useState(false);
+	// The lecture pick (Learnbox): lectureId → topicId → depth, edited in the
+	// lectures dialog and sent with the create. Teach drafts only.
+	const [lecturePick, setLecturePick] = useState<LecturePick>({});
+	const lecturePickRef = useRef<LecturePick>({});
+	const applyLecturePick = useCallback((next: LecturePick) => {
+		lecturePickRef.current = next;
+		setLecturePick(next);
+	}, []);
+	const [lecturesOpen, setLecturesOpen] = useState(false);
 	// The study course of the lesson, and the flashcards it starts from (cards belong to their
 	// course: choosing another one drops them). Mirrored in a ref like the other picks.
 	const [courseId, setCourseId] = useState(initialCourseId);
@@ -344,6 +360,7 @@ export function NewSession({
 			fetch,
 			mode === "practice" ? "practice" : undefined,
 			mode === "practice" ? picksRef.current : undefined,
+			mode === "practice" ? undefined : pickRequest(lecturePickRef.current),
 			mode === "practice" ? undefined : studyRef.current,
 		)
 			.then((target) => {
@@ -364,6 +381,13 @@ export function NewSession({
 				picks={picks}
 				onOpenPicker={openPicker}
 				onClearPicks={() => applyPicks([])}
+				lecturePicker={
+					<LecturePickerControl
+						topics={countPick(lecturePick).topics}
+						onOpen={() => setLecturesOpen(true)}
+						onClear={() => applyLecturePick({})}
+					/>
+				}
 				coursePicker={
 					courses.length > 0 || courseId !== "" ? (
 						<DraftCourseControl
@@ -417,6 +441,7 @@ export function NewSession({
 					)
 				}
 			/>
+			<LecturesDialog open={lecturesOpen} onClose={() => setLecturesOpen(false)} pick={lecturePick} onPick={applyLecturePick} />
 			{/* First-run setup: the send interception's landing surface — stage
 			    1 is the self-contained first-key screen (zero-keys wave). */}
 			<SetupDialog

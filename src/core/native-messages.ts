@@ -42,6 +42,7 @@ import {
 	NEXT_PROBLEM_TEXT,
 	THINKING_LABEL,
 } from "./contracts/chat.ts";
+import { LECTURE_DEPTHS, LECTURE_DEPTH_GUIDE, type LectureContextData, type SessionLecture } from "./contracts/library.ts";
 import { compactAnswerForModel, type QuestionAnswerData } from "./question-core.ts";
 import { activeCompactionOf, keptIndexFor } from "./compaction.ts";
 
@@ -67,6 +68,7 @@ export interface LhMarkerMessage {
 	role: "custom";
 	customType:
 		| "graph-context"
+		| "lecture-context"
 		| "study-context"
 		| "probe-handoff"
 		| "subagent-steer"
@@ -283,6 +285,41 @@ export function newGraphContextMessage(picks: readonly GraphContextPick[], chain
 		content: lines.join("\n"),
 		display: true,
 		details: { propositions: picks, chains },
+		timestamp: Date.now(),
+	};
+}
+
+/** The session's lecture context (Learnbox, 2026-10): the lectures the learner
+ *  chose before probing, the topics picked from their outlines, and the depth
+ *  wanted per topic. Same shape of law as the graph-context marker: a SEPARATE
+ *  custom message BEFORE the learner's first user message; `content` is what
+ *  the model reads (flattened to a user message, so the bracket convention),
+ *  `details` is the UI card's payload (no file paths). The lectures are the
+ *  CURRICULUM — what exists to learn — never evidence of what the learner
+ *  already knows; the text says so, because a model that mistook them for
+ *  knowledge would skip exactly what the session is for. */
+export function newLectureContextMessage(lectures: readonly SessionLecture[]): LhMarkerMessage {
+	const lines = [
+		"[Session context] — lecture material the learner chose for this session. These lectures are the CURRICULUM: what there is to learn. They are NOT evidence of what the learner already knows — measure that.",
+		"",
+		"Depth levels:",
+		...LECTURE_DEPTHS.map((d) => `- ${LECTURE_DEPTH_GUIDE[d]}`),
+	];
+	for (const lecture of lectures) {
+		lines.push(
+			"",
+			`Lecture "${lecture.title}" — ${lecture.pages ?? "?"} pages — read it with the pdf tool, path: ${lecture.path}`,
+			...lecture.topics.map((t) => `- [${t.id}] ${t.title} (pp. ${t.pageStart}-${t.pageEnd}) — depth: ${t.depth} — ${t.summary}`),
+		);
+	}
+	const data: LectureContextData = { lectures: lectures.map(({ path: _path, ...rest }) => rest) };
+	return {
+		id: newMessageId(),
+		role: "custom",
+		customType: "lecture-context",
+		content: lines.join("\n"),
+		display: true,
+		details: data,
 		timestamp: Date.now(),
 	};
 }
@@ -734,7 +771,7 @@ export function nativeInputCause(message: AgentMessage, history: readonly AgentM
 	if (message.role === "custom") {
 		if (["probe-handoff", "subagent-steer", "subagent-abort"].includes(message.customType)) return "automatic";
 		if (["practice-thinking", "practice-next"].includes(message.customType)) return "learner";
-		return ["graph-context", "study-context", "plan-block", "problem-dismissed", "compaction"].includes(message.customType) ? "neutral" : "unrecognizable";
+		return ["graph-context", "lecture-context", "study-context", "plan-block", "problem-dismissed", "compaction"].includes(message.customType) ? "neutral" : "unrecognizable";
 	}
 	if (message.role === "toolResult") {
 		if (!(QUESTION_TOOLS as readonly string[]).includes(message.toolName) || message.isError || message.details == null || (message.details as { dismissed?: boolean }).dismissed) return "neutral";

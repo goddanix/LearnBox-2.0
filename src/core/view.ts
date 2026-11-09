@@ -381,6 +381,16 @@ function projectMarker(marker: LhMarkerMessage, out: LhViewMessage[]): void {
 			});
 			return;
 		}
+		case "lecture-context": {
+			// The session's lecture pick (Learnbox, 2026-10): same user-side
+			// scaffolding register as the graph-context card.
+			out.push({
+				id: marker.id,
+				role: "user",
+				parts: [{ type: "data-lecture-context", id: `lc_${marker.id}`, data: marker.details }],
+			});
+			return;
+		}
 		case "study-context": {
 			// The session's course and flashcard context (Learnbox 2.0, Slice 9):
 			// same user-side scaffolding register as the other context cards.

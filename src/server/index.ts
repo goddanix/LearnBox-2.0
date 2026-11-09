@@ -11,6 +11,7 @@ export * from "./graph.ts";
 export { NotesImportError } from "../agent/subagents/extraction.ts";
 export * from "./commit-positions.ts";
 export * from "./jobs.ts";
+export * from "./library.ts";
 export * from "./mobile.ts";
 export * from "./phone-deck.ts";
 export * from "./phone-lessons.ts";

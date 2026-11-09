@@ -222,17 +222,17 @@ describe("startDraftSession with a course", () => {
 
 	it("sends the course and the card ids with the first message — ids only, the server reads the text", async () => {
 		const { f, calls } = fakeFetch();
-		const target = await startDraftSession("I keep getting these cards wrong.", f, undefined, undefined, { courseId: "anat", cardIds: ["a", "b"] });
+		const target = await startDraftSession("I keep getting these cards wrong.", f, undefined, undefined, undefined, { courseId: "anat", cardIds: ["a", "b"] });
 		assert.equal(target, "/chat/c9?prompt=I%20keep%20getting%20these%20cards%20wrong.");
 		assert.deepEqual(calls[0]!.body.study, { courseId: "anat", cardIds: ["a", "b"] });
 	});
 
 	it("sends nothing for a draft without a course, and never for a practice drill", async () => {
 		const a = fakeFetch();
-		await startDraftSession("hello", a.f, undefined, undefined, { courseId: "", cardIds: [] });
+		await startDraftSession("hello", a.f, undefined, undefined, undefined, { courseId: "", cardIds: [] });
 		assert.ok(!("study" in a.calls[0]!.body));
 		const b = fakeFetch();
-		await startDraftSession("drill", b.f, "practice", undefined, { courseId: "anat", cardIds: [] });
+		await startDraftSession("drill", b.f, "practice", undefined, undefined, { courseId: "anat", cardIds: [] });
 		assert.ok(!("study" in b.calls[0]!.body));
 	});
 });
