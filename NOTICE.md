@@ -35,7 +35,7 @@ Learnbox is an independent project. It is **not** made, endorsed or supported by
 
 ## Source code (AGPL-3.0 section 13)
 
-The complete corresponding source of Learnbox is published at <https://github.com/goddanix/learnbox>. If you use Learnbox over a network, for example through the phone app, you can get the source there. The app's settings link to it.
+The complete corresponding source of Learnbox is published at <https://github.com/goddanix/LearnBox-2.0>. If you use Learnbox over a network, for example through the phone app, you can get the source there. The app's settings link to it.
 
 ## Third-party software
 

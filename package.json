@@ -12,13 +12,13 @@
 			"url": "https://github.com/goddanix"
 		}
 	],
-	"homepage": "https://github.com/goddanix/learnbox",
+	"homepage": "https://github.com/goddanix/LearnBox-2.0",
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/goddanix/learnbox.git"
+		"url": "git+https://github.com/goddanix/LearnBox-2.0.git"
 	},
 	"bugs": {
-		"url": "https://github.com/goddanix/learnbox/issues"
+		"url": "https://github.com/goddanix/LearnBox-2.0/issues"
 	},
 	"desktopName": "learnharness.desktop",
 	"description": "Learnbox: adaptive AI teaching and practice for biophysics and biology, with a persistent knowledge graph (fork of LearnHarness, AGPL-3.0).",

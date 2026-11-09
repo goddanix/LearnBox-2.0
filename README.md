@@ -27,4 +27,4 @@ On a Mac, `npm run learnbox:update` builds the desktop app, archives the build, 
 
 [AGPL-3.0-only](LICENSE). The program comes with no warranty. Credits and the statement of what was modified are in [NOTICE.md](NOTICE.md).
 
-If you use Learnbox over a network, you can get its source code at <https://github.com/goddanix/learnbox>.
+If you use Learnbox over a network, you can get its source code at <https://github.com/goddanix/LearnBox-2.0>.

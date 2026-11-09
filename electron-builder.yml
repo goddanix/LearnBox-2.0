@@ -195,6 +195,6 @@ publish:
   # upload; publishing happens at release time (GH_TOKEN + --publish).
   - provider: github
     owner: goddanix
-    repo: learnbox
+    repo: LearnBox-2.0
     # All three CI jobs contribute assets; only the owner publishes it.
     releaseType: draft
